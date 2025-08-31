@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Chores Rotation</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏠 Family Chores</h1>
+            <div class="header-controls">
+                <div class="date-display">
+                    <span id="currentDate"></span>
+                </div>
+                <button id="settingsBtn" class="btn btn-primary">⚙️ Settings</button>
+                <button id="syncBtn" class="btn btn-secondary">📱 Sync</button>
+            </div>
+        </header>
+
+        <div id="tasksView" class="main-view">
+            <div id="childrenColumns" class="children-grid">
+                <!-- Children columns will be dynamically generated here -->
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>⚙️ Settings</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="settings-section">
+                        <h3>🔒 Parent Settings</h3>
+                        <div class="parent-settings">
+                            <div class="input-group">
+                                <label for="currentPin">Current PIN:</label>
+                                <input type="password" id="currentPin" placeholder="Current PIN" maxlength="4" pattern="[0-9]{4}">
+                            </div>
+                            <div class="input-group">
+                                <label for="newPin">New PIN (4 digits):</label>
+                                <input type="password" id="newPin" placeholder="New 4-digit PIN" maxlength="4" pattern="[0-9]{4}">
+                            </div>
+                            <div class="input-group">
+                                <label for="confirmPin">Confirm New PIN:</label>
+                                <input type="password" id="confirmPin" placeholder="Confirm PIN" maxlength="4" pattern="[0-9]{4}">
+                                <button id="savePin" class="btn btn-secondary">Change PIN</button>
+                            </div>
+                            <div class="approval-settings">
+                                <h4>Require Parent Approval For:</h4>
+                                <label><input type="checkbox" id="approveTaskMove"> Moving tasks between children</label>
+                                <label><input type="checkbox" id="approveEarlyComplete"> Completing tasks early</label>
+                                <label><input type="checkbox" id="approveTaskComplete"> Marking any task complete</label>
+                                <label><input type="checkbox" id="approveEditTasks"> Editing tasks and children</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>👥 Children</h3>
+                        <div id="childrenList"></div>
+                        <div class="input-group">
+                            <input type="text" id="newChildName" placeholder="Child name">
+                            <button id="addChildBtn" class="btn btn-primary">Add Child</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>📝 Chores</h3>
+                        <div id="choresList"></div>
+                        <div class="add-chore-form">
+                            <div class="input-group">
+                                <input type="text" id="newChoreName" placeholder="Chore name">
+                                <input type="text" id="newChoreEmoji" placeholder="Emoji" maxlength="2">
+                                <input type="color" id="newChoreColor" value="#FFB6C1">
+                            </div>
+                            <div class="input-group">
+                                <input type="number" id="newChoreStars" placeholder="Stars" min="1" max="5" value="1">
+                                <input type="number" id="newChoreMoney" placeholder="Money ($)" min="0" step="0.25" value="0.50">
+                            </div>
+                            <div class="recurrence-group">
+                                <label for="choreRecurrence">Repeat:</label>
+                                <select id="choreRecurrence">
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="monthly">Monthly</option>
+                                    <option value="weekdays">Weekdays Only</option>
+                                    <option value="weekends">Weekends Only</option>
+                                    <option value="custom-days">Specific Days</option>
+                                </select>
+                            </div>
+                            <div id="customDaysSelector" class="custom-days" style="display: none;">
+                                <label>Select days:</label>
+                                <div class="days-checkboxes">
+                                    <label><input type="checkbox" value="0"> Sun</label>
+                                    <label><input type="checkbox" value="1"> Mon</label>
+                                    <label><input type="checkbox" value="2"> Tue</label>
+                                    <label><input type="checkbox" value="3"> Wed</label>
+                                    <label><input type="checkbox" value="4"> Thu</label>
+                                    <label><input type="checkbox" value="5"> Fri</label>
+                                    <label><input type="checkbox" value="6"> Sat</label>
+                                </div>
+                            </div>
+                            <button id="addChoreBtn" class="btn btn-primary">Add Chore</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
+                    <button id="resetDataBtn" class="btn btn-danger">Reset All Data</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Task Edit Modal -->
+        <div id="taskEditModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>✏️ Edit Task</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editTaskId">
+                    <div class="input-group">
+                        <label for="editTaskName">Task Name:</label>
+                        <input type="text" id="editTaskName" placeholder="Task name">
+                    </div>
+                    <div class="input-group">
+                        <label for="editTaskEmoji">Emoji:</label>
+                        <input type="text" id="editTaskEmoji" placeholder="Emoji" maxlength="2">
+                    </div>
+                    <div class="input-group">
+                        <label for="editTaskColor">Color:</label>
+                        <input type="color" id="editTaskColor">
+                    </div>
+                    <div class="input-group">
+                        <label for="editTaskStars">Star Reward:</label>
+                        <input type="number" id="editTaskStars" min="1" max="5">
+                    </div>
+                    <div class="input-group">
+                        <label for="editTaskMoney">Money Reward:</label>
+                        <input type="number" id="editTaskMoney" min="0" step="0.25">
+                    </div>
+                    <div class="recurrence-group">
+                        <label for="editTaskRecurrence">Repeat:</label>
+                        <select id="editTaskRecurrence">
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="weekdays">Weekdays Only</option>
+                            <option value="weekends">Weekends Only</option>
+                            <option value="custom-days">Specific Days</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveTaskBtn" class="btn btn-primary">Save Changes</button>
+                    <button id="cancelEditBtn" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PIN Entry Modal -->
+        <div id="pinModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>🔒 Parent Approval Required</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <p id="pinRequestMessage">Enter parent PIN to continue:</p>
+                    <div class="pin-input">
+                        <input type="password" id="pinEntry" placeholder="Enter 4-digit PIN" maxlength="4" pattern="[0-9]{4}">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="submitPin" class="btn btn-primary">Submit</button>
+                    <button id="cancelPin" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add One-off Task Modal -->
+        <div id="oneOffTaskModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>➕ Add One-off Task</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="input-group">
+                        <label for="oneOffTaskName">Task Name:</label>
+                        <input type="text" id="oneOffTaskName" placeholder="Task name">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskEmoji">Emoji:</label>
+                        <input type="text" id="oneOffTaskEmoji" placeholder="Emoji" maxlength="2">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskColor">Color:</label>
+                        <input type="color" id="oneOffTaskColor" value="#FFB6C1">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskStars">Star Reward:</label>
+                        <input type="number" id="oneOffTaskStars" min="1" max="5" value="1">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskMoney">Money Reward:</label>
+                        <input type="number" id="oneOffTaskMoney" min="0" step="0.25" value="0.50">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskDate">Date:</label>
+                        <input type="date" id="oneOffTaskDate">
+                    </div>
+                    <div class="input-group">
+                        <label for="oneOffTaskType">Task Type:</label>
+                        <select id="oneOffTaskType">
+                            <option value="any-child">Any child can complete</option>
+                            <option value="first-come">First child to claim gets it</option>
+                            <option value="all-children">Each child can complete once</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveOneOffTaskBtn" class="btn btn-primary">Add Task</button>
+                    <button id="cancelOneOffBtn" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sync Modal -->
+        <div id="syncModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>📱 Sync Data</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="sync-section">
+                        <h3>Share Configuration</h3>
+                        <p>Scan this QR code on another device to sync your chore settings:</p>
+                        <div id="qrCodeContainer" class="qr-container"></div>
+                        <button id="generateQRBtn" class="btn btn-primary">Generate QR Code</button>
+                    </div>
+                    
+                    <div class="sync-section">
+                        <h3>Import Configuration</h3>
+                        <div class="import-options">
+                            <button id="scanQRBtn" class="btn btn-primary">📷 Scan QR Code</button>
+                            <button id="manualImportBtn" class="btn btn-secondary">✏️ Manual Entry</button>
+                        </div>
+                        
+                        <div id="qrScannerContainer" class="qr-scanner" style="display: none;">
+                            <video id="qrVideo" autoplay muted playsinline></video>
+                            <canvas id="qrCanvas" style="display: none;"></canvas>
+                            <div class="scanner-overlay">
+                                <div class="scanner-frame"></div>
+                                <p>Position QR code within the frame</p>
+                                <button id="stopScanBtn" class="btn btn-danger">Stop Scanning</button>
+                            </div>
+                        </div>
+                        
+                        <div id="manualImportContainer" style="display: none;">
+                            <p>Paste the configuration data from another device:</p>
+                            <textarea id="importData" placeholder="Paste configuration data here..."></textarea>
+                            <button id="importDataBtn" class="btn btn-primary">Import Data</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js%3Fv=19"></script>
+</body>
+</html>
