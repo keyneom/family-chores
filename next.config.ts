@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   output: 'export',
   basePath: '/family-chores',
   assetPrefix: '/family-chores/',
+  images: {
+    unoptimized: true,
+  }
 };
 
 export default nextConfig;
