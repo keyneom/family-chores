@@ -16,6 +16,8 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
   const [color, setColor] = React.useState("#cccccc");
   const [starReward, setStarReward] = React.useState(1);
   const [moneyReward, setMoneyReward] = React.useState(0);
+  const [recurrence, setRecurrence] = React.useState("daily");
+  const [customDays, setCustomDays] = React.useState<number[]>([]);
 
   React.useEffect(() => {
     if (task) {
@@ -24,6 +26,8 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
       setColor(task.color);
       setStarReward(task.starReward);
       setMoneyReward(task.moneyReward);
+      setRecurrence(task.recurrence);
+      setCustomDays(task.customDays);
     }
   }, [task]);
 
@@ -31,7 +35,15 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ ...task, name, emoji, color, starReward, moneyReward });
+    onSave({ ...task, name, emoji, color, starReward, moneyReward, recurrence, customDays });
+  };
+  
+  const handleCustomDayChange = (day: number, checked: boolean) => {
+    if (checked) {
+      setCustomDays([...customDays, day]);
+    } else {
+      setCustomDays(customDays.filter(d => d !== day));
+    }
   };
 
   return (
@@ -62,6 +74,34 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
             Money Reward:
             <input type="number" value={moneyReward} min={0} step={0.01} onChange={e => setMoneyReward(Number(e.target.value))} />
           </label>
+          <label>
+            Recurrence:
+            <select value={recurrence} onChange={e => setRecurrence(e.target.value)}>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="weekdays">Weekdays Only</option>
+              <option value="weekends">Weekends Only</option>
+              <option value="custom-days">Specific Days</option>
+            </select>
+          </label>
+          {recurrence === "custom-days" && (
+            <div className="custom-days">
+              <label>Select days:</label>
+              <div className="days-checkboxes">
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, index) => (
+                  <label key={index}>
+                    <input
+                      type="checkbox"
+                      checked={customDays.includes(index)}
+                      onChange={(e) => handleCustomDayChange(index, e.target.checked)}
+                    />
+                    {day}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="modal-footer">
             <button className="btn btn-primary" type="submit">Save</button>
             <button className="btn" type="button" onClick={onClose}>Cancel</button>

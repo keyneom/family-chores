@@ -10,26 +10,44 @@ export interface Task {
   starReward: number;
   moneyReward: number;
   isCompleted?: boolean;
+  taskKey?: string;
+  type?: 'regular' | 'one-off';
 }
 
 
 
 interface TaskItemProps {
   task: Task;
+  childId: number;
 }
 
-export default function TaskItem({ task }: TaskItemProps) {
-  const { setState } = useChoresApp();
+export default function TaskItem({ task, childId }: TaskItemProps) {
+  const { dispatch } = useChoresApp();
   const { openTaskEditModal } = useModalControl();
+  
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+      taskId: task.id,
+      taskKey: task.taskKey,
+      sourceChildId: childId,
+      taskType: task.type
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
 
   const handleComplete = () => {
-    setState((prev) => ({
-      ...prev,
-      chores: prev.chores.map((chore) =>
-        chore.id === task.id ? { ...chore, isCompleted: true } : chore
-      ),
-    }));
-  } 
+    if (task.taskKey) {
+      dispatch({
+        type: 'COMPLETE_TASK',
+        payload: {
+          taskKey: task.taskKey,
+          childId,
+          starReward: task.starReward,
+          moneyReward: task.moneyReward,
+        },
+      });
+    }
+  }; 
 
   const handleEdit = () => {
     openTaskEditModal(task.id);
@@ -37,10 +55,7 @@ export default function TaskItem({ task }: TaskItemProps) {
 
   const handleDelete = () => {
     if (window.confirm("Are you sure you want to delete this task?")) {
-      setState(prev => ({
-        ...prev,
-        chores: prev.chores.filter(chore => chore.id !== task.id)
-      }));
+      dispatch({ type: 'DELETE_CHORE_TEMPLATE', payload: task.id });
     }
   };
 
@@ -48,7 +63,10 @@ export default function TaskItem({ task }: TaskItemProps) {
     <div
       className={`task-item${task.isCompleted ? " completed" : ""}`}
       style={{ borderColor: task.color }}
+      draggable={!task.isCompleted}
+      onDragStart={handleDragStart}
     >
+      {!task.isCompleted && <span className="drag-handle">⋮⋮</span>}
       <div className="task-info">
         <span className="task-emoji">{task.emoji}</span>
         <div className="task-details">

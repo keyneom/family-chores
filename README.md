@@ -1,40 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/pages/api-reference/create-next-app).
+# 🏠 Family Chores Rotation App
+
+A comprehensive family chore management system built with Next.js that automatically rotates tasks between children and tracks rewards.
+
+## Features
+
+### 📋 Core Functionality
+- **Automatic Task Rotation**: Chores are automatically assigned to children using a date-based rotation algorithm
+- **Reward System**: Track stars and money earned for completed tasks
+- **Smart Scheduling**: Support for daily, weekly, monthly, weekdays, weekends, and custom day patterns
+- **Task Completion**: Mark tasks complete to earn rewards and update child statistics
+- **Payment System**: Pay out accumulated money rewards to children
+
+### 👥 Family Management
+- **Children Management**: Add, edit, and delete children with individual reward tracking
+- **Chore Templates**: Create reusable chore templates with custom emojis, colors, and rewards
+- **One-off Tasks**: Add special tasks for specific dates (any child, first-come, or all children)
+
+### ⚙️ Advanced Features
+- **Parent Controls**: PIN-protected settings and approval workflows
+- **Data Persistence**: All data saved locally in browser storage
+- **Responsive Design**: Works on desktop and mobile devices
+- **Export/Import**: Sync data between devices using QR codes
 
 ## Getting Started
 
-First, run the development server:
-
+### Development
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Open [http://localhost:3000](http://localhost:3000) to view the app.
+
+### Production Build
+```bash
+npm run build
+npm run export
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### GitHub Pages Deployment
+This app is configured as a static site that can be deployed to GitHub Pages:
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
+1. Push your code to a GitHub repository
+2. Go to repository Settings > Pages
+3. Set source to "GitHub Actions"
+4. The app will be available at `https://yourusername.github.io/family-chores/`
 
-[API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
+The app is pre-configured with:
+- Static export enabled
+- Base path set to `/family-chores`
+- All assets properly configured for GitHub Pages
 
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) instead of React pages.
+## How to Use
 
-This project uses [`next/font`](https://nextjs.org/docs/pages/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Add Children**: Click "+ Add Child" to add family members
+2. **Create Chores**: Click "+ Add Chore" to create recurring tasks
+3. **View Daily Tasks**: Each child's column shows their assigned tasks for today
+4. **Complete Tasks**: Click "Complete" to mark tasks done and earn rewards
+5. **Pay Rewards**: Use the "Pay" button to reset a child's money balance
+6. **Manage Settings**: Click the settings gear to configure chores, children, and parent controls
 
-## Learn More
+## Task Assignment Logic
 
-To learn more about Next.js, take a look at the following resources:
+- Tasks are automatically assigned using a consistent rotation algorithm
+- Assignment is based on the current date and chore ID for fairness
+- Only eligible children (or all children if none specified) receive assignments
+- Completed tasks are tracked daily to prevent duplicate completions
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn-pages-router) - an interactive Next.js tutorial.
+## Scheduling Options
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Daily**: Task appears every day
+- **Weekly**: Task appears once per week on a consistent day
+- **Monthly**: Task appears once per month
+- **Weekdays**: Monday through Friday only
+- **Weekends**: Saturday and Sunday only
+- **Custom Days**: Select specific days of the week
 
-## Deploy on Vercel
+## Data Storage
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/pages/building-your-application/deploying) for more details.
+All data is stored locally in your browser's localStorage. Use the sync feature to share configurations between devices.
