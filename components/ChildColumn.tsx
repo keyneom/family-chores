@@ -1,5 +1,5 @@
 import React from "react";
-import TaskItem, { Task } from "./TaskItem";
+import TaskItem from "./TaskItem";
 import { useChoresApp } from "./ChoresAppContext";
 import { useModalControl } from "./ModalControlContext";
 import { shouldChoreRunToday } from "../utils/choreScheduling";
