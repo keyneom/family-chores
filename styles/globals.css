@@ -281,6 +281,26 @@ header h1 {
   padding: 20px;
 }
 
+/* Better form label layout inside modals: keep label text and input on one line when space allows */
+.modal-body form label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.modal-body form label input,
+.modal-body form label select,
+.modal-body form label textarea {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+.modal-body form label input[type="color"],
+.modal-body form label input[type="checkbox"] {
+  flex: 0 0 auto;
+  min-width: auto;
+}
+
 .modal-footer {
   padding: 20px;
   border-top: 1px solid #e2e8f0;

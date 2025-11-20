@@ -58,7 +58,7 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
         chores: state.chores,
         choreTemplates: state.choreTemplates,
         parentSettings: {
-          pin: state.parentSettings.pin,
+          pins: state.parentSettings.pins || [],
           approvals: state.parentSettings.approvals
         },
         completedTasks: state.completedTasks,

@@ -18,6 +18,10 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
   const [moneyReward, setMoneyReward] = React.useState(0);
   const [recurrence, setRecurrence] = React.useState("daily");
   const [customDays, setCustomDays] = React.useState<number[]>([]);
+  const [timed, setTimed] = React.useState(false);
+  const [allowedMinutes, setAllowedMinutes] = React.useState(5);
+  const [latePenaltyPercent, setLatePenaltyPercent] = React.useState(50);
+  const [autoApproveOnStop, setAutoApproveOnStop] = React.useState(false);
 
   React.useEffect(() => {
     if (task) {
@@ -28,6 +32,10 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
       setMoneyReward(task.moneyReward);
       setRecurrence(task.recurrence);
       setCustomDays(task.customDays);
+      setTimed(!!task.timed);
+      setAllowedMinutes(task.allowedSeconds ? Math.round(task.allowedSeconds / 60) : 5);
+      setLatePenaltyPercent(task.latePenaltyPercent ? Math.round(task.latePenaltyPercent * 100) : 50);
+      setAutoApproveOnStop(!!task.autoApproveOnStop);
     }
   }, [task]);
 
@@ -35,7 +43,7 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ ...task, name, emoji, color, starReward, moneyReward, recurrence, customDays });
+    onSave({ ...task, name, emoji, color, starReward, moneyReward, recurrence, customDays, timed, allowedSeconds: Math.round(allowedMinutes * 60), latePenaltyPercent: latePenaltyPercent / 100, autoApproveOnStop });
   };
   
   const handleCustomDayChange = (day: number, checked: boolean) => {
@@ -74,6 +82,26 @@ export default function TaskEditModal({ open, onClose, task, onSave }: TaskEditM
             Money Reward:
             <input type="number" value={moneyReward} min={0} step={0.01} onChange={e => setMoneyReward(Number(e.target.value))} />
           </label>
+          <label>
+            Timed Task:
+            <input type="checkbox" checked={timed} onChange={e => setTimed(e.target.checked)} />
+          </label>
+          {timed && (
+            <>
+              <label>
+                Allowed Minutes:
+                <input type="number" value={allowedMinutes} min={1} onChange={e => setAllowedMinutes(Number(e.target.value))} />
+              </label>
+              <label>
+                Late Penalty (% of reward when late):
+                <input type="number" value={latePenaltyPercent} min={-200} max={200} onChange={e => setLatePenaltyPercent(Number(e.target.value))} />
+              </label>
+              <label>
+                Auto-approve on Stop:
+                <input type="checkbox" checked={autoApproveOnStop} onChange={e => setAutoApproveOnStop(e.target.checked)} />
+              </label>
+            </>
+          )}
           <label>
             Recurrence:
             <select value={recurrence} onChange={e => setRecurrence(e.target.value)}>

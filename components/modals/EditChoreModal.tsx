@@ -15,6 +15,10 @@ export default function EditChoreModal({ open, onClose, chore, onSave, onDelete 
   const [color, setColor] = useState("#cccccc");
   const [starReward, setStarReward] = useState(1);
   const [moneyReward, setMoneyReward] = useState(0);
+  const [timed, setTimed] = useState(false);
+  const [allowedMinutes, setAllowedMinutes] = useState(5);
+  const [latePenaltyPercent, setLatePenaltyPercent] = useState(50);
+  const [autoApproveOnStop, setAutoApproveOnStop] = useState(false);
 
   React.useEffect(() => {
     if (chore) {
@@ -23,6 +27,10 @@ export default function EditChoreModal({ open, onClose, chore, onSave, onDelete 
       setColor(chore.color);
       setStarReward(chore.starReward);
       setMoneyReward(chore.moneyReward);
+      setTimed(!!chore.timed);
+      setAllowedMinutes(chore.allowedSeconds ? Math.round(chore.allowedSeconds / 60) : 5);
+      setLatePenaltyPercent(chore.latePenaltyPercent ? Math.round(chore.latePenaltyPercent * 100) : 50);
+      setAutoApproveOnStop(!!chore.autoApproveOnStop);
     }
   }, [chore]);
 
@@ -30,7 +38,7 @@ export default function EditChoreModal({ open, onClose, chore, onSave, onDelete 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ ...chore, name, emoji, color, starReward, moneyReward });
+    onSave({ ...chore, name, emoji, color, starReward, moneyReward, timed, allowedSeconds: Math.round(allowedMinutes * 60), latePenaltyPercent: latePenaltyPercent / 100, autoApproveOnStop });
   };
 
   return (
@@ -58,6 +66,26 @@ export default function EditChoreModal({ open, onClose, chore, onSave, onDelete 
             Money Reward:
             <input type="number" value={moneyReward} min={0} step={0.01} onChange={e => setMoneyReward(Number(e.target.value))} />
           </label>
+          <label>
+            Timed Task:
+            <input type="checkbox" checked={timed} onChange={e => setTimed(e.target.checked)} />
+          </label>
+          {timed && (
+            <>
+              <label>
+                Allowed Minutes:
+                <input type="number" value={allowedMinutes} min={1} onChange={e => setAllowedMinutes(Number(e.target.value))} />
+              </label>
+              <label>
+                Late Penalty (% of reward when late):
+                <input type="number" value={latePenaltyPercent} min={-200} max={200} onChange={e => setLatePenaltyPercent(Number(e.target.value))} />
+              </label>
+              <label>
+                Auto-approve on Stop:
+                <input type="checkbox" checked={autoApproveOnStop} onChange={e => setAutoApproveOnStop(e.target.checked)} />
+              </label>
+            </>
+          )}
           <div className="modal-actions">
             <button type="submit">Save</button>
             <button type="button" onClick={onClose}>Cancel</button>

@@ -1,5 +1,6 @@
 import React from "react";
-import ChildColumn, { Child } from "./ChildColumn";
+import ChildColumn from "./ChildColumn";
+import { Child } from "./ChoresAppContext";
 
 
 

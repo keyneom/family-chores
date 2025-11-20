@@ -5,32 +5,60 @@ interface PinModalProps {
   open: boolean;
   onClose: () => void;
   message?: string;
-  onSuccess: () => void;
+  // onSuccess returns the actor handle (if any) that performed the approval
+  onSuccess: (actorHandle?: string) => void;
 }
 
 export default function PinModal({ open, onClose, message, onSuccess }: PinModalProps) {
   const { state } = useChoresApp();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [selectedHandle, setSelectedHandle] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (state.parentSettings.pins && state.parentSettings.pins.length > 0) {
+      setSelectedHandle(state.parentSettings.pins[0].handle);
+    } else {
+      setSelectedHandle(null);
+    }
+    setPin("");
+    setError("");
+  }, [open, state.parentSettings.pins]);
 
   if (!open) return null;
 
-  const handleSubmit = () => {
-    if (!state.parentSettings.pin) {
-      // No PIN set, allow action
-      onSuccess();
-      onClose();
+  const handleSubmit = async () => {
+    // If named pins exist, prefer secure verification
+    const pins = state.parentSettings.pins || [];
+    if (pins.length > 0) {
+      const chosen = pins.find(p => p.handle === selectedHandle);
+      if (!chosen) {
+        setError("Please select an approver handle");
+        return;
+      }
+      try {
+        // lazy import utils to ensure crypto available in browser
+        const { hashPin } = await import('../../utils/pinUtils');
+        const h = await hashPin(pin, chosen.salt);
+        if (h === chosen.pinHash) {
+          onSuccess(chosen.handle);
+          onClose();
+          setPin("");
+          setError("");
+          return;
+        }
+        setError('Incorrect PIN for ' + chosen.handle);
+        setPin("");
+      } catch {
+        setError('Verification error');
+      }
       return;
     }
-    
-    if (pin === state.parentSettings.pin) {
-      onSuccess();
-      onClose();
-      setPin("");
-      setError("");
-    } else {
-      setError("Incorrect PIN");
-      setPin("");
+    // If there are no named approvers, inform the user and do not allow
+    // approval via this modal — approvers must be created first.
+    if (pins.length === 0) {
+      setError('No approvers defined. Please add an approver in Settings first.');
+      return;
     }
   };
 
@@ -49,6 +77,16 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
         </div>
         <div className="modal-body">
           <p>{message || "Enter parent PIN to continue:"}</p>
+          {state.parentSettings.pins && state.parentSettings.pins.length > 0 && (
+            <div className="input-group">
+              <label>Approver:</label>
+              <select value={selectedHandle || ''} onChange={(e) => setSelectedHandle(e.target.value)}>
+                {state.parentSettings.pins!.map(p => (
+                  <option key={p.handle} value={p.handle}>{p.handle}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="pin-input">
             <input
               type="password"

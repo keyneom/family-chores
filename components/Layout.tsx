@@ -1,5 +1,16 @@
 
 import React, { ReactNode, useState } from "react";
+import { WagmiConfig, createConfig, configureChains } from 'wagmi';
+import { mainnet, arbitrum, base } from 'wagmi/chains';
+import { publicProvider } from 'wagmi/providers/public';
+import { InjectedConnector } from 'wagmi/connectors/injected';
+
+const { chains, publicClient } = configureChains([mainnet, arbitrum, base], [publicProvider()]);
+const wagmiConfig = createConfig({
+  autoConnect: true,
+  connectors: [new InjectedConnector({ chains })],
+  publicClient,
+});
 import { ModalControlContext } from "./ModalControlContext";
 import Header from "./Header";
 
@@ -14,6 +25,8 @@ import SyncModal from "./modals/SyncModal";
 import EditChildModal from "./modals/EditChildModal";
 import AddChildModal from "./modals/AddChildModal";
 import AddChoreModal from "./modals/AddChoreModal";
+import TaskModal from "./modals/TaskModal";
+import Task from "../types/task";
 import EditChoreModal from "./modals/EditChoreModal";
 
 interface LayoutProps {
@@ -33,14 +46,19 @@ export default function Layout({ children }: LayoutProps) {
   const [editChildId, setEditChildId] = useState<number|null>(null);
   const [addChildOpen, setAddChildOpen] = useState(false);
   const [addChoreOpen, setAddChoreOpen] = useState(false);
+  const [addUnifiedTaskOpen, setAddUnifiedTaskOpen] = useState(false);
+  const [editUnifiedTaskOpen, setEditUnifiedTaskOpen] = useState(false);
+  const [initialTaskForEdit, setInitialTaskForEdit] = useState<Task | null>(null);
   const [editChoreOpen, setEditChoreOpen] = useState(false);
   const [editChoreId, setEditChoreId] = useState<number|null>(null);
   const { state, dispatch } = useChoresApp();
-  // Handler to open AddChoreModal
+  // Handler to open AddChoreModal (legacy)
   const openAddChoreModal = () => setAddChoreOpen(true);
+  // Handler to open the unified TaskModal
+  const openAddUnifiedTaskModal = () => setAddUnifiedTaskOpen(true);
 
   // Handler to add a new chore
-  const handleAddChore = (chore: { name: string; emoji: string; color: string; starReward: number; moneyReward: number }) => {
+  const handleAddChore = (chore: { name: string; emoji: string; color: string; starReward: number; moneyReward: number; timed?: boolean; allowedSeconds?: number; latePenaltyPercent?: number; autoApproveOnStop?: boolean }) => {
     dispatch({
       type: 'SET_STATE',
       payload: {
@@ -57,6 +75,10 @@ export default function Layout({ children }: LayoutProps) {
             eligibleChildren: [],
             starReward: chore.starReward,
             moneyReward: chore.moneyReward,
+            timed: chore.timed || false,
+            allowedSeconds: chore.allowedSeconds || undefined,
+            latePenaltyPercent: chore.latePenaltyPercent || undefined,
+            autoApproveOnStop: chore.autoApproveOnStop || false,
           }
         ]
       }
@@ -161,9 +183,29 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   // Handler to open TaskEditModal for a specific task
-  const openTaskEditModal = (taskId: number) => {
-    setEditTaskId(taskId);
-    setTaskEditOpen(true);
+  const openTaskEditModal = (taskId: string | number) => {
+    const numericId = typeof taskId === 'number' ? taskId : Number(taskId);
+    setEditTaskId(Number.isNaN(numericId) ? null : numericId);
+    // Try to find the legacy chore and convert to Task shape for editing
+    const chore = Number.isNaN(numericId) ? null : (state.chores.find((c) => c.id === numericId) || null);
+    if (chore) {
+      const t: Task = {
+        id: `chore_${chore.id}`,
+        title: chore.name,
+        description: '',
+        createdAt: new Date().toISOString(),
+        enabled: true,
+        requirePin: false,
+        stars: chore.starReward,
+        money: chore.moneyReward,
+        type: chore.timed ? 'timed' : 'recurring',
+        ...(chore.timed ? { timed: { allowedSeconds: chore.allowedSeconds || 60, latePenaltyPercent: chore.latePenaltyPercent ?? 0.5, autoApproveOnStop: chore.autoApproveOnStop ?? false, allowNegative: false } } : { recurring: { cadence: chore.recurrence || 'daily' } }),
+      } as Task;
+      setInitialTaskForEdit(t);
+      setEditUnifiedTaskOpen(true);
+    } else {
+      setTaskEditOpen(true);
+    }
   };
 
   // Handler to add a new task (chore) to state
@@ -191,6 +233,7 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   return (
+    <WagmiConfig config={wagmiConfig}>
     <ModalControlContext.Provider value={{
       openTaskEditModal,
       openAddTaskModal,
@@ -223,8 +266,23 @@ export default function Layout({ children }: LayoutProps) {
             setTaskEditOpen(false);
           }}
         />
-        <AddTaskModal open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onAdd={handleAddTask} />
-        <AddChoreModal open={addChoreOpen} onClose={() => setAddChoreOpen(false)} onAdd={handleAddChore} />
+  <AddTaskModal open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onAdd={handleAddTask} />
+  <AddChoreModal open={addChoreOpen} onClose={() => setAddChoreOpen(false)} onAdd={handleAddChore} />
+  <TaskModal open={addUnifiedTaskOpen} onClose={() => setAddUnifiedTaskOpen(false)} />
+  <TaskModal
+    open={editUnifiedTaskOpen}
+    onClose={() => { setEditUnifiedTaskOpen(false); setInitialTaskForEdit(null); }}
+    initialTask={initialTaskForEdit}
+    onSave={(task) => {
+      // If editing a legacy chore, sync edits back to chores
+      if (initialTaskForEdit && initialTaskForEdit.id?.startsWith('chore_')) {
+        const choreId = parseInt(initialTaskForEdit.id.split('_')[1], 10);
+        dispatch({ type: 'SET_STATE', payload: { ...state, chores: state.chores.map(ch => ch.id === choreId ? { ...ch, name: task.title, starReward: task.stars ?? ch.starReward, moneyReward: task.money ?? ch.moneyReward, timed: task.type === 'timed', allowedSeconds: task.type === 'timed' ? task.timed?.allowedSeconds : ch.allowedSeconds, latePenaltyPercent: task.type === 'timed' ? task.timed?.latePenaltyPercent : ch.latePenaltyPercent, autoApproveOnStop: task.type === 'timed' ? task.timed?.autoApproveOnStop : ch.autoApproveOnStop } : ch) } });
+      }
+      setEditUnifiedTaskOpen(false);
+      setInitialTaskForEdit(null);
+    }}
+  />
         <EditChoreModal
           open={editChoreOpen}
           onClose={() => setEditChoreOpen(false)}
@@ -251,9 +309,10 @@ export default function Layout({ children }: LayoutProps) {
         {/* Add Child/Chore buttons (demo, move to UI as needed) */}
         <div style={{ position: 'fixed', bottom: 10, right: 10, zIndex: 2000 }}>
           <button className="btn btn-primary" onClick={openAddChildModal} style={{marginRight: 4}}>+ Add Child</button>
-          <button className="btn btn-primary" onClick={openAddChoreModal}>+ Add Chore</button>
+          <button className="btn btn-primary" onClick={openAddUnifiedTaskModal}>+ Add Chore</button>
         </div>
       </div>
     </ModalControlContext.Provider>
+    </WagmiConfig>
   );
 }

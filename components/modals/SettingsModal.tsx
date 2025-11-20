@@ -9,6 +9,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const { state, dispatch } = useChoresApp();
   const [newChildName, setNewChildName] = useState("");
+  const [newChildBlockchain, setNewChildBlockchain] = useState("");
   const [newChoreName, setNewChoreName] = useState("");
   const [newChoreEmoji, setNewChoreEmoji] = useState("");
   const [newChoreColor, setNewChoreColor] = useState("#FFB6C1");
@@ -16,9 +17,14 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [newChoreMoney, setNewChoreMoney] = useState(0.5);
   const [choreRecurrence, setChoreRecurrence] = useState("daily");
   const [customDays, setCustomDays] = useState<number[]>([]);
-  const [currentPin, setCurrentPin] = useState("");
-  const [newPin, setNewPin] = useState("");
-  const [confirmPin, setConfirmPin] = useState("");
+  // Legacy single PIN removed. Approvers are managed via `pins` below.
+  const [newPinHandle, setNewPinHandle] = useState("");
+  const [newPinCode, setNewPinCode] = useState("");
+  const [newPinConfirm, setNewPinConfirm] = useState("");
+  const [verifyExistingHandle, setVerifyExistingHandle] = useState("");
+  const [verifyExistingPin, setVerifyExistingPin] = useState("");
+  const [showAddApproverInline, setShowAddApproverInline] = useState(false);
+  const [pendingApprovalKey, setPendingApprovalKey] = useState<null | keyof typeof state.parentSettings.approvals>(null);
 
   if (!open) return null;
 
@@ -30,10 +36,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           id: Date.now(),
           name: newChildName.trim(),
           stars: 0,
-          money: 0
+          money: 0,
+          blockchainAddress: newChildBlockchain || undefined,
         }
       });
       setNewChildName("");
+      setNewChildBlockchain("");
     }
   };
 
@@ -76,29 +84,73 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  const handleSavePin = () => {
-    if (newPin !== confirmPin) {
-      alert("PINs do not match");
+  // legacy single PIN removed — no handler
+
+  const handleAddPin = async () => {
+    if (!newPinHandle.trim()) return alert('Enter a handle');
+    if (newPinCode !== newPinConfirm) return alert('PINs do not match');
+    if (!/^[0-9]{4}$/.test(newPinCode)) return alert('PIN must be 4 digits');
+    const existing = state.parentSettings.pins || [];
+    const proceedToAdd = async () => {
+      try {
+        const { genSalt, hashPin } = await import('../../utils/pinUtils');
+        const salt = await genSalt();
+        const pinHash = await hashPin(newPinCode, salt);
+        const updated = [ ...existing.filter(p => p.handle !== newPinHandle.trim()), { handle: newPinHandle.trim(), pinHash, salt } ];
+        dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated } });
+        setNewPinHandle(''); setNewPinCode(''); setNewPinConfirm('');
+        alert('Approver added');
+      } catch (e) {
+        console.error('pin add error', e);
+        alert('Failed to add approver');
+      }
+    };
+
+    if (existing.length > 0) {
+      // require verification using an existing approver before adding a new one
+      if (!verifyExistingHandle) return alert('Select an existing approver to authorize this change');
+      if (!/^[0-9]{4}$/.test(verifyExistingPin)) return alert('Enter current approver PIN (4 digits)');
+      try {
+        const { hashPin } = await import('../../utils/pinUtils');
+        const chosen = existing.find(p => p.handle === verifyExistingHandle);
+        if (!chosen) return alert('Selected approver not found');
+        const h = await hashPin(verifyExistingPin, chosen.salt);
+        if (h !== chosen.pinHash) return alert('Existing approver PIN is incorrect');
+        await proceedToAdd();
+        // if we were opening the inline modal to enable a specific approval, enable it now
+        if (pendingApprovalKey) {
+          dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [pendingApprovalKey]: true } } });
+          setPendingApprovalKey(null);
+        }
+      } catch (e) {
+        console.error('verify error', e);
+        alert('Verification failed');
+      }
+    } else {
+      await proceedToAdd();
+      if (pendingApprovalKey) {
+        dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [pendingApprovalKey]: true } } });
+        setPendingApprovalKey(null);
+      }
+    }
+  };
+
+  const handleRemovePin = (handle: string) => {
+    if (!confirm(`Remove approver ${handle}?`)) return;
+    const existing = state.parentSettings.pins || [];
+    const updated = existing.filter(p => p.handle !== handle);
+    dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated } });
+  };
+
+  const handleToggleApproval = (key: keyof typeof state.parentSettings.approvals, enabled: boolean) => {
+    const approvers = state.parentSettings.pins || [];
+    if (enabled && approvers.length === 0) {
+      // Open inline add-approver prompt so the user can create the first approver now
+      setPendingApprovalKey(key);
+      setShowAddApproverInline(true);
       return;
     }
-    if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
-      alert("PIN must be exactly 4 digits");
-      return;
-    }
-    if (state.parentSettings.pin && currentPin !== state.parentSettings.pin) {
-      alert("Current PIN is incorrect");
-      return;
-    }
-    
-    dispatch({
-      type: "UPDATE_PARENT_SETTINGS",
-      payload: { pin: newPin }
-    });
-    
-    setCurrentPin("");
-    setNewPin("");
-    setConfirmPin("");
-    alert("PIN updated successfully");
+    dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [key]: enabled } } });
   };
 
   const handleSaveSettings = () => {
@@ -123,49 +175,81 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           <div className="settings-section">
             <h3>🔒 Parent Settings</h3>
             <div className="parent-settings">
-              <div className="input-group">
-                <label htmlFor="currentPin">Current PIN:</label>
-                <input
-                  type="password"
-                  id="currentPin"
-                  placeholder="Current PIN"
-                  maxLength={4}
-                  value={currentPin}
-                  onChange={(e) => setCurrentPin(e.target.value)}
-                />
-              </div>
-              <div className="input-group">
-                <label htmlFor="newPin">New PIN (4 digits):</label>
-                <input
-                  type="password"
-                  id="newPin"
-                  placeholder="New 4-digit PIN"
-                  maxLength={4}
-                  value={newPin}
-                  onChange={(e) => setNewPin(e.target.value)}
-                />
-              </div>
-              <div className="input-group">
-                <label htmlFor="confirmPin">Confirm New PIN:</label>
-                <input
-                  type="password"
-                  id="confirmPin"
-                  placeholder="Confirm PIN"
-                  maxLength={4}
-                  value={confirmPin}
-                  onChange={(e) => setConfirmPin(e.target.value)}
-                />
-                <button className="btn btn-secondary" onClick={handleSavePin}>Change PIN</button>
-              </div>
+              
               <div className="approval-settings">
                 <h4>Require Parent Approval For:</h4>
-                <label><input type="checkbox" /> Moving tasks between children</label>
-                <label><input type="checkbox" /> Completing tasks early</label>
-                <label><input type="checkbox" /> Marking any task complete</label>
-                <label><input type="checkbox" /> Editing tasks and children</label>
+                <label>
+                  <input type="checkbox" checked={state.parentSettings.approvals.taskMove} onChange={(e) => handleToggleApproval('taskMove', e.target.checked)} /> Moving tasks between children
+                </label>
+                <label>
+                  <input type="checkbox" checked={state.parentSettings.approvals.earlyComplete} onChange={(e) => handleToggleApproval('earlyComplete', e.target.checked)} /> Completing tasks early
+                </label>
+                <label>
+                  <input type="checkbox" checked={state.parentSettings.approvals.taskComplete} onChange={(e) => handleToggleApproval('taskComplete', e.target.checked)} /> Marking any task complete
+                </label>
+                <label>
+                  <input type="checkbox" checked={state.parentSettings.approvals.editTasks} onChange={(e) => handleToggleApproval('editTasks', e.target.checked)} /> Editing tasks and children
+                </label>
+              </div>
+              <div className="approver-list" style={{ marginTop: 12 }}>
+                <h4>Approvers</h4>
+                {(!state.parentSettings.pins || state.parentSettings.pins.length === 0) ? (
+                  <div className="empty-state">No approvers defined. Add one below.</div>
+                ) : (
+                  state.parentSettings.pins!.map(p => (
+                    <div key={p.handle} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <div>{p.handle}</div>
+                      <div><button className="btn btn-small btn-danger" onClick={() => handleRemovePin(p.handle)}>Remove</button></div>
+                    </div>
+                  ))
+                )}
+                <div style={{ marginTop: 8 }}>
+                  <input placeholder="Handle (e.g. Dad)" value={newPinHandle} onChange={e => setNewPinHandle(e.target.value)} />
+                    <input placeholder="PIN" type="password" maxLength={4} style={{ marginLeft: 8 }} value={newPinCode} onChange={e => setNewPinCode(e.target.value)} />
+                    <input placeholder="Confirm" type="password" maxLength={4} style={{ marginLeft: 8 }} value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)} />
+                    <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={handleAddPin}>Add Approver</button>
+                </div>
               </div>
             </div>
+                {showAddApproverInline && (
+                  <div className="modal" style={{ display: 'block' }}>
+                    <div className="modal-content">
+                      <div className="modal-header">
+                        <h3>Add Approver</h3>
+                        <span className="close" onClick={() => setShowAddApproverInline(false)}>&times;</span>
+                      </div>
+                      <div className="modal-body">
+                        <div style={{ marginBottom: 8 }}>No approvers found — create the first approver to enable approval flows.</div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input placeholder="Handle (e.g. Parent)" value={newPinHandle} onChange={e => setNewPinHandle(e.target.value)} />
+                          <input placeholder="PIN" type="password" maxLength={4} value={newPinCode} onChange={e => setNewPinCode(e.target.value)} />
+                          <input placeholder="Confirm" type="password" maxLength={4} value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="modal-footer">
+                        <button className="btn btn-primary" onClick={async () => {
+                          await handleAddPin();
+                          // if added, close inline modal and enable all approvals unchecked (user can toggle)
+                          setShowAddApproverInline(false);
+                        }}>Create Approver</button>
+                        <button className="btn btn-secondary" onClick={() => setShowAddApproverInline(false)}>Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
           </div>
+                  {state.parentSettings.pins && state.parentSettings.pins.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ marginBottom: 6 }}>To add a new approver, enter an existing approver handle and PIN to authorize this change.</div>
+                      <select value={verifyExistingHandle} onChange={e => setVerifyExistingHandle(e.target.value)}>
+                        <option value="">-- Select approver --</option>
+                        {state.parentSettings.pins!.map(p => (
+                          <option key={p.handle} value={p.handle}>{p.handle}</option>
+                        ))}
+                      </select>
+                      <input type="password" placeholder="Existing approver PIN" maxLength={4} style={{ marginLeft: 8 }} value={verifyExistingPin} onChange={e => setVerifyExistingPin(e.target.value)} />
+                    </div>
+                  )}
 
           <div className="settings-section">
             <h3>👥 Children</h3>
@@ -177,6 +261,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   <div key={child.id} className="child-item">
                     <div className="child-info">
                       <span className="child-name">{child.name}</span>
+                      <div style={{ fontSize: '0.8rem', color: '#666' }}>{child.blockchainAddress || <em>No address</em>}</div>
                     </div>
                     <div className="child-actions">
                       <button className="btn btn-small btn-danger" onClick={() => handleDeleteChild(child.id)}>Delete</button>
@@ -191,6 +276,13 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 placeholder="Child name"
                 value={newChildName}
                 onChange={(e) => setNewChildName(e.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="Blockchain address / ENS (optional)"
+                value={newChildBlockchain}
+                onChange={(e) => setNewChildBlockchain(e.target.value)}
+                style={{ marginLeft: 8 }}
               />
               <button className="btn btn-primary" onClick={handleAddChild}>Add Child</button>
             </div>
