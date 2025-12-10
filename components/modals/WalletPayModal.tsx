@@ -125,11 +125,11 @@ export default function WalletPayModal({ open, onClose, child, defaultAmount = 0
   if (!open) return null;
 
   return (
-    <div className="modal" style={{ display: "block" }}>
-      <div className="modal-content">
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Pay {child.name} On-Chain</h2>
-          <span className="close" onClick={onClose}>&times;</span>
+          <span className="close" onClick={(e) => { e.stopPropagation(); onClose(); }}>&times;</span>
         </div>
         <div className="modal-body">
           <div className="input-group">
@@ -145,7 +145,7 @@ export default function WalletPayModal({ open, onClose, child, defaultAmount = 0
           </div>
           <div className="input-group">
             <label>Amount ({token === "ETH" ? "ETH" : "USDC"}):</label>
-            <input value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.01" />
           </div>
           <div className="input-group">
             <label>Network:</label>
@@ -155,18 +155,18 @@ export default function WalletPayModal({ open, onClose, child, defaultAmount = 0
               <option value={8453}>Base</option>
             </select>
           </div>
-          <div className="wallet-controls">
+          <div className="input-group">
             {connectedAddress ? (
-              <div>Connected: {connectedAddress}</div>
+              <div style={{ padding: '8px', background: '#f7fafc', borderRadius: '4px' }}>Connected: {connectedAddress}</div>
             ) : (
               <button className="btn btn-primary" onClick={connect}>Connect Wallet</button>
             )}
           </div>
-          <div style={{ marginTop: 12 }}>
-            <button className="btn btn-primary" onClick={sendPayment}>Send Payment</button>
-            <button className="btn" onClick={onClose} style={{ marginLeft: 8 }}>Cancel</button>
-          </div>
-          {status && <div style={{ marginTop: 12 }}>{status}</div>}
+          {status && <div className="error-message" style={{ marginTop: '12px', background: status.includes('error') || status.includes('error') ? '#fed7d7' : '#d1fae5', color: status.includes('error') || status.includes('error') ? '#c53030' : '#065f46' }}>{status}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={sendPayment}>Send Payment</button>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
         </div>
       </div>
     </div>

@@ -13,52 +13,40 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
   const { state } = useChoresApp();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
-  const [selectedHandle, setSelectedHandle] = useState<string | null>(null);
 
   React.useEffect(() => {
-    if (state.parentSettings.pins && state.parentSettings.pins.length > 0) {
-      setSelectedHandle(state.parentSettings.pins[0].handle);
-    } else {
-      setSelectedHandle(null);
-    }
     setPin("");
     setError("");
-  }, [open, state.parentSettings.pins]);
+  }, [open]);
 
   if (!open) return null;
 
   const handleSubmit = async () => {
-    // If named pins exist, prefer secure verification
     const pins = state.parentSettings.pins || [];
-    if (pins.length > 0) {
-      const chosen = pins.find(p => p.handle === selectedHandle);
-      if (!chosen) {
-        setError("Please select an approver handle");
-        return;
-      }
-      try {
-        // lazy import utils to ensure crypto available in browser
-        const { hashPin } = await import('../../utils/pinUtils');
-        const h = await hashPin(pin, chosen.salt);
-        if (h === chosen.pinHash) {
-          onSuccess(chosen.handle);
-          onClose();
-          setPin("");
-          setError("");
-          return;
-        }
-        setError('Incorrect PIN for ' + chosen.handle);
-        setPin("");
-      } catch {
-        setError('Verification error');
-      }
-      return;
-    }
-    // If there are no named approvers, inform the user and do not allow
-    // approval via this modal — approvers must be created first.
     if (pins.length === 0) {
       setError('No approvers defined. Please add an approver in Settings first.');
       return;
+    }
+    if (!/^[0-9]{4,12}$/.test(pin)) {
+      setError('Enter a 4-12 digit PIN');
+      return;
+    }
+    try {
+      const { hashPin } = await import('../../utils/pinUtils');
+      for (const entry of pins) {
+        const hashed = await hashPin(pin, entry.salt);
+        if (hashed === entry.pinHash) {
+          onSuccess(entry.handle);
+          setPin("");
+          setError("");
+          onClose();
+          return;
+        }
+      }
+      setError('PIN not recognized');
+      setPin("");
+    } catch {
+      setError('Verification error');
     }
   };
 
@@ -69,32 +57,25 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
   };
 
   return (
-    <div className="modal" style={{ display: "block" }}>
-      <div className="modal-content">
+    <div className="modal-overlay" onClick={handleClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>🔒 Parent Approval Required</h2>
           <span className="close" onClick={handleClose}>&times;</span>
         </div>
         <div className="modal-body">
           <p>{message || "Enter parent PIN to continue:"}</p>
-          {state.parentSettings.pins && state.parentSettings.pins.length > 0 && (
-            <div className="input-group">
-              <label>Approver:</label>
-              <select value={selectedHandle || ''} onChange={(e) => setSelectedHandle(e.target.value)}>
-                {state.parentSettings.pins!.map(p => (
-                  <option key={p.handle} value={p.handle}>{p.handle}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="pin-input">
+          <div className="input-group">
+            <label>PIN:</label>
             <input
               type="password"
-              placeholder="Enter 4-digit PIN"
-              maxLength={4}
+              placeholder="Enter PIN (4-12 digits)"
+              minLength={4}
+              maxLength={12}
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+              style={{ flex: 1 }}
             />
           </div>
           {error && <div className="error-message">{error}</div>}

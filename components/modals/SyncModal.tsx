@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import { useChoresApp } from "../ChoresAppContext";
+import AlertModal from "./AlertModal";
 import QRCode from 'qrcode';
 import QrScanner from 'qr-scanner';
 import pako from 'pako';
@@ -16,6 +17,7 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
   const [showImport, setShowImport] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [error, setError] = useState("");
+  const [successAlertOpen, setSuccessAlertOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<QrScanner | null>(null);
 
@@ -55,14 +57,15 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
       // Complete app state export
       const exportData = {
         children: state.children,
-        chores: state.chores,
-        choreTemplates: state.choreTemplates,
+        tasks: state.tasks,
+        taskInstances: state.taskInstances || [],
         parentSettings: {
           pins: state.parentSettings.pins || [],
           approvals: state.parentSettings.approvals
         },
         completedTasks: state.completedTasks,
-        oneOffTasks: state.oneOffTasks
+        timers: state.timers,
+        timedCompletions: state.timedCompletions
       };
       
       const jsonString = JSON.stringify(exportData);
@@ -127,14 +130,16 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
         throw new Error("Invalid configuration format");
       }
 
-      // Import complete state
+      // Import complete state (migrate legacy data if needed)
+      const importedTasks = parsedData.tasks || [];
       const newState = {
         children: parsedData.children || [],
-        chores: parsedData.chores || [],
-        choreTemplates: parsedData.choreTemplates || [],
+        tasks: importedTasks,
+        taskInstances: parsedData.taskInstances || [],
         parentSettings: parsedData.parentSettings || state.parentSettings,
         completedTasks: parsedData.completedTasks || {},
-        oneOffTasks: parsedData.oneOffTasks || {}
+        timers: parsedData.timers || {},
+        timedCompletions: parsedData.timedCompletions || []
       };
 
       dispatch({
@@ -144,8 +149,7 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
 
       setImportData("");
       setError("");
-      alert("Configuration imported successfully!");
-      onClose();
+      setSuccessAlertOpen(true);
     } catch (error) {
       console.error('Import error:', error);
       setError('Error importing configuration. Please check the data format.');
@@ -155,11 +159,11 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
 
 
   return (
-    <div className="modal" style={{ display: "block" }}>
-      <div className="modal-content">
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>📱 Sync Data</h2>
-          <span className="close" onClick={onClose}>&times;</span>
+          <span className="close" onClick={(e) => { e.stopPropagation(); onClose(); }}>&times;</span>
         </div>
         <div className="modal-body">
           {error && (
@@ -257,6 +261,15 @@ export default function SyncModal({ open, onClose }: SyncModalProps) {
           <button className="btn btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
+      <AlertModal
+        open={successAlertOpen}
+        onClose={() => {
+          setSuccessAlertOpen(false);
+          onClose();
+        }}
+        title="Success"
+        message="Configuration imported successfully!"
+      />
     </div>
   );
 }

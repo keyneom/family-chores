@@ -15,19 +15,15 @@ import { ModalControlContext } from "./ModalControlContext";
 import Header from "./Header";
 
 import SettingsModal from "./modals/SettingsModal";
-
-import TaskEditModal from "./modals/TaskEditModal";
-import AddTaskModal from "./modals/AddTaskModal";
+import ConfirmationModal from "./modals/ConfirmationModal";
 import { useChoresApp } from "./ChoresAppContext";
-import PinModal from "./modals/PinModal";
 import OneOffTaskModal from "./modals/OneOffTaskModal";
 import SyncModal from "./modals/SyncModal";
 import EditChildModal from "./modals/EditChildModal";
 import AddChildModal from "./modals/AddChildModal";
-import AddChoreModal from "./modals/AddChoreModal";
 import TaskModal from "./modals/TaskModal";
 import Task from "../types/task";
-import EditChoreModal from "./modals/EditChoreModal";
+import TourGuide from "./Onboarding/TourGuide";
 
 interface LayoutProps {
   children: ReactNode;
@@ -35,92 +31,71 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [taskEditOpen, setTaskEditOpen] = useState(false);
-  const [editTaskId, setEditTaskId] = useState<number|null>(null);
-  const [addTaskOpen, setAddTaskOpen] = useState(false);
-  const [pinOpen, setPinOpen] = useState(false);
   const [oneOffTaskOpen, setOneOffTaskOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [addTaskChildId, setAddTaskChildId] = useState<number|null>(null);
   const [editChildOpen, setEditChildOpen] = useState(false);
   const [editChildId, setEditChildId] = useState<number|null>(null);
   const [addChildOpen, setAddChildOpen] = useState(false);
-  const [addChoreOpen, setAddChoreOpen] = useState(false);
   const [addUnifiedTaskOpen, setAddUnifiedTaskOpen] = useState(false);
   const [editUnifiedTaskOpen, setEditUnifiedTaskOpen] = useState(false);
   const [initialTaskForEdit, setInitialTaskForEdit] = useState<Task | null>(null);
-  const [editChoreOpen, setEditChoreOpen] = useState(false);
-  const [editChoreId, setEditChoreId] = useState<number|null>(null);
+  const [editOption, setEditOption] = useState<'instance' | 'future' | 'template' | null>(null);
+  const [editInstanceId, setEditInstanceId] = useState<string | null>(null);
+  const [tourActive, setTourActive] = useState(false);
   const { state, dispatch } = useChoresApp();
-  // Handler to open AddChoreModal (legacy)
-  const openAddChoreModal = () => setAddChoreOpen(true);
-  // Handler to open the unified TaskModal
-  const openAddUnifiedTaskModal = () => setAddUnifiedTaskOpen(true);
 
-  // Handler to add a new chore
-  const handleAddChore = (chore: { name: string; emoji: string; color: string; starReward: number; moneyReward: number; timed?: boolean; allowedSeconds?: number; latePenaltyPercent?: number; autoApproveOnStop?: boolean }) => {
-    dispatch({
-      type: 'SET_STATE',
-      payload: {
-        ...state,
-        chores: [
-          ...state.chores,
-          {
-            id: state.chores.length > 0 ? Math.max(...state.chores.map(c => c.id)) + 1 : 1,
-            name: chore.name,
-            emoji: chore.emoji,
-            color: chore.color,
-            recurrence: "daily",
-            customDays: [],
-            eligibleChildren: [],
-            starReward: chore.starReward,
-            moneyReward: chore.moneyReward,
-            timed: chore.timed || false,
-            allowedSeconds: chore.allowedSeconds || undefined,
-            latePenaltyPercent: chore.latePenaltyPercent || undefined,
-            autoApproveOnStop: chore.autoApproveOnStop || false,
-          }
-        ]
-      }
-    });
-  };
+  // Check if onboarding is needed on mount
+  React.useEffect(() => {
+    // Check if onboarding has been completed or skipped (stored in parentSettings)
+    const onboardingCompleted = state.parentSettings.onboardingCompleted === true;
 
-  // Handler to open EditChoreModal for a specific chore
-  const openEditChoreModal = (choreId: number) => {
-    setEditChoreId(choreId);
-    setEditChoreOpen(true);
-  };
-
-  // Handler to save edits to a chore
-  const handleEditChore = (updatedChore: import("./ChoresAppContext").Chore) => {
-    dispatch({
-      type: 'SET_STATE',
-      payload: {
-        ...state,
-        chores: state.chores.map(chore => chore.id === updatedChore.id ? { ...chore, ...updatedChore } : chore)
-      }
-    });
-    setEditChoreOpen(false);
-  };
-
-  // Handler to delete a chore
-  const handleDeleteChore = (choreId: number) => {
-    if (window.confirm("Are you sure you want to delete this chore?")) {
-      dispatch({
-        type: 'SET_STATE',
-        payload: {
-          ...state,
-          chores: state.chores.filter(chore => chore.id !== choreId)
-        }
-      });
-      setEditChoreOpen(false);
+    // Don't show tour if it's already been completed or skipped
+    if (onboardingCompleted) {
+      setTourActive(false);
+      return;
     }
+
+    // Check if there are any approvers (pins may be undefined or empty array)
+    const hasApprovers = state.parentSettings.pins && state.parentSettings.pins.length > 0;
+
+    // Show tour if no approvers exist (meaning it's a fresh install or user hasn't set up approvers yet)
+    // But only if it hasn't been explicitly completed/skipped
+    const needsTour = !hasApprovers;
+
+    if (needsTour) {
+      setTourActive(true);
+    }
+  }, [state.parentSettings.onboardingCompleted, state.parentSettings.pins]);
+  
+  // Handler to open the unified TaskModal
+  const openAddUnifiedTaskModal = () => {
+    // Close Settings modal if open (UX principle: only one primary modal at a time)
+    if (settingsOpen) {
+      setSettingsOpen(false);
+    }
+    // Close Add Child modal if open
+    if (addChildOpen) {
+      setAddChildOpen(false);
+    }
+    setAddUnifiedTaskOpen(true);
+  };
+  
+  // Legacy handlers for backward compatibility (used by ModalControlContext)
+  const openEditChoreModal = () => {
+    // No-op: legacy handler, use openTaskEditModal instead
   };
   // Handler to open AddChildModal
-  const openAddChildModal = () => setAddChildOpen(true);
+  const openAddChildModal = () => {
+    // Close Settings modal if open (UX principle: only one primary modal at a time)
+    if (settingsOpen) {
+      setSettingsOpen(false);
+    }
+    setAddChildOpen(true);
+  };
 
   // Handler to add a new child
-  const handleAddChild = (child: { name: string }) => {
+  const handleAddChild = (child: { name: string; blockchainAddress?: string }) => {
     dispatch({
       type: 'SET_STATE',
       payload: {
@@ -131,7 +106,8 @@ export default function Layout({ children }: LayoutProps) {
             id: state.children.length > 0 ? Math.max(...state.children.map(c => c.id)) + 1 : 1,
             name: child.name,
             stars: 0,
-            money: 0
+            money: 0,
+            blockchainAddress: child.blockchainAddress
           }
         ]
       }
@@ -156,24 +132,33 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   // Handler to delete a child
+  const [deleteChildConfirmOpen, setDeleteChildConfirmOpen] = React.useState(false);
+  const [childToDelete, setChildToDelete] = React.useState<number | null>(null);
+  
   const handleDeleteChild = (childId: number) => {
-    if (window.confirm("Are you sure you want to delete this child?")) {
+    setChildToDelete(childId);
+    setDeleteChildConfirmOpen(true);
+  };
+
+  const confirmDeleteChild = () => {
+    if (childToDelete !== null) {
       dispatch({
         type: 'SET_STATE',
         payload: {
           ...state,
-          children: state.children.filter(child => child.id !== childId)
+          children: state.children.filter(child => child.id !== childToDelete)
         }
       });
+      setChildToDelete(null);
       setEditChildOpen(false);
     }
   };
 
 
-  // Handler to open AddTaskModal for a specific child
+  // Handler to open AddTaskModal for a specific child (use unified TaskModal)
   const openAddTaskModal = (childId: number) => {
     setAddTaskChildId(childId);
-    setAddTaskOpen(true);
+    setAddUnifiedTaskOpen(true);
   };
   
   // Handler to open OneOffTaskModal for a specific child
@@ -183,53 +168,16 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   // Handler to open TaskEditModal for a specific task
-  const openTaskEditModal = (taskId: string | number) => {
-    const numericId = typeof taskId === 'number' ? taskId : Number(taskId);
-    setEditTaskId(Number.isNaN(numericId) ? null : numericId);
-    // Try to find the legacy chore and convert to Task shape for editing
-    const chore = Number.isNaN(numericId) ? null : (state.chores.find((c) => c.id === numericId) || null);
-    if (chore) {
-      const t: Task = {
-        id: `chore_${chore.id}`,
-        title: chore.name,
-        description: '',
-        createdAt: new Date().toISOString(),
-        enabled: true,
-        requirePin: false,
-        stars: chore.starReward,
-        money: chore.moneyReward,
-        type: chore.timed ? 'timed' : 'recurring',
-        ...(chore.timed ? { timed: { allowedSeconds: chore.allowedSeconds || 60, latePenaltyPercent: chore.latePenaltyPercent ?? 0.5, autoApproveOnStop: chore.autoApproveOnStop ?? false, allowNegative: false } } : { recurring: { cadence: chore.recurrence || 'daily' } }),
-      } as Task;
-      setInitialTaskForEdit(t);
+  const openTaskEditModal = (taskId: string | number, editOption?: 'instance' | 'future' | 'template', instanceId?: string) => {
+    const taskIdStr = String(taskId);
+    const task = state.tasks.find((t) => t.id === taskIdStr);
+    if (task) {
+      setInitialTaskForEdit(task);
+      setEditOption(editOption || null);
+      setEditInstanceId(instanceId || null);
       setEditUnifiedTaskOpen(true);
-    } else {
-      setTaskEditOpen(true);
     }
-  };
-
-  // Handler to add a new task (chore) to state
-  const handleAddTask = (task: { name: string; emoji: string; color: string; starReward: number; moneyReward: number }) => {
-    dispatch({
-      type: 'SET_STATE',
-      payload: {
-        ...state,
-        chores: [
-          ...state.chores,
-          {
-            id: state.chores.length > 0 ? Math.max(...state.chores.map(c => c.id)) + 1 : 1,
-            name: task.name,
-            emoji: task.emoji,
-            color: task.color,
-            recurrence: "daily",
-            customDays: [],
-            eligibleChildren: addTaskChildId !== null ? [addTaskChildId] : [],
-            starReward: task.starReward,
-            moneyReward: task.moneyReward,
-          }
-        ]
-      }
-    });
+    // If task not found, do nothing (task may have been deleted)
   };
 
   return (
@@ -239,56 +187,40 @@ export default function Layout({ children }: LayoutProps) {
       openAddTaskModal,
       openEditChildModal,
       openAddChildModal,
-      openAddChoreModal,
+      openAddChoreModal: openAddUnifiedTaskModal, // Map to unified task modal (legacy compatibility)
       openEditChoreModal,
       openOneOffTaskModal
     }}>
       <div className="container">
         <Header 
-          onSettingsClick={() => setSettingsOpen(true)}
+          onSettingsClick={() => {
+            // Close other modals if open (UX principle: only one primary modal at a time)
+            if (addChildOpen) {
+              setAddChildOpen(false);
+            }
+            if (addUnifiedTaskOpen) {
+              setAddUnifiedTaskOpen(false);
+            }
+            if (editUnifiedTaskOpen) {
+              setEditUnifiedTaskOpen(false);
+            }
+            setSettingsOpen(true);
+          }}
           onSyncClick={() => setSyncOpen(true)}
         />
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        <TaskEditModal
-          open={taskEditOpen}
-          onClose={() => setTaskEditOpen(false)}
-          task={state.chores.find((chore) => chore.id === editTaskId) || null}
-          onSave={(updatedTask) => {
-            dispatch({
-              type: 'SET_STATE',
-              payload: {
-                ...state,
-                chores: state.chores.map((chore) =>
-                  chore.id === updatedTask.id ? { ...chore, ...updatedTask } : chore
-                ),
-              }
-            });
-            setTaskEditOpen(false);
+        <TaskModal open={addUnifiedTaskOpen} onClose={() => setAddUnifiedTaskOpen(false)} />
+        <TaskModal
+          open={editUnifiedTaskOpen}
+          onClose={() => { 
+            setEditUnifiedTaskOpen(false); 
+            setInitialTaskForEdit(null); 
+            setEditOption(null);
+            setEditInstanceId(null);
           }}
-        />
-  <AddTaskModal open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onAdd={handleAddTask} />
-  <AddChoreModal open={addChoreOpen} onClose={() => setAddChoreOpen(false)} onAdd={handleAddChore} />
-  <TaskModal open={addUnifiedTaskOpen} onClose={() => setAddUnifiedTaskOpen(false)} />
-  <TaskModal
-    open={editUnifiedTaskOpen}
-    onClose={() => { setEditUnifiedTaskOpen(false); setInitialTaskForEdit(null); }}
-    initialTask={initialTaskForEdit}
-    onSave={(task) => {
-      // If editing a legacy chore, sync edits back to chores
-      if (initialTaskForEdit && initialTaskForEdit.id?.startsWith('chore_')) {
-        const choreId = parseInt(initialTaskForEdit.id.split('_')[1], 10);
-        dispatch({ type: 'SET_STATE', payload: { ...state, chores: state.chores.map(ch => ch.id === choreId ? { ...ch, name: task.title, starReward: task.stars ?? ch.starReward, moneyReward: task.money ?? ch.moneyReward, timed: task.type === 'timed', allowedSeconds: task.type === 'timed' ? task.timed?.allowedSeconds : ch.allowedSeconds, latePenaltyPercent: task.type === 'timed' ? task.timed?.latePenaltyPercent : ch.latePenaltyPercent, autoApproveOnStop: task.type === 'timed' ? task.timed?.autoApproveOnStop : ch.autoApproveOnStop } : ch) } });
-      }
-      setEditUnifiedTaskOpen(false);
-      setInitialTaskForEdit(null);
-    }}
-  />
-        <EditChoreModal
-          open={editChoreOpen}
-          onClose={() => setEditChoreOpen(false)}
-          chore={state.chores.find(chore => chore.id === editChoreId) || null}
-          onSave={handleEditChore}
-          onDelete={handleDeleteChore}
+          initialTask={initialTaskForEdit}
+          editOption={editOption}
+          editInstanceId={editInstanceId}
         />
         <AddChildModal open={addChildOpen} onClose={() => setAddChildOpen(false)} onAdd={handleAddChild} />
         <EditChildModal
@@ -298,18 +230,41 @@ export default function Layout({ children }: LayoutProps) {
           onSave={handleEditChild}
           onDelete={handleDeleteChild}
         />
-        <PinModal open={pinOpen} onClose={() => setPinOpen(false)} onSuccess={() => setPinOpen(false)} />
         <OneOffTaskModal 
           open={oneOffTaskOpen} 
           onClose={() => setOneOffTaskOpen(false)} 
           childId={addTaskChildId || undefined}
         />
         <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
-        {children}
+        <TourGuide 
+          active={tourActive} 
+          onComplete={() => {
+            setTourActive(false);
+            // Mark tour as complete - the action log will be updated when state changes
+            // We'll check for ONBOARDING_COMPLETE in the action log to prevent showing tour again
+          }}
+          onSkip={() => {
+            setTourActive(false);
+            // Mark tour as skipped - same as complete for our purposes
+          }}
+        />
+        <ConfirmationModal
+          open={deleteChildConfirmOpen}
+          onClose={() => { setDeleteChildConfirmOpen(false); setChildToDelete(null); }}
+          onConfirm={confirmDeleteChild}
+          title="Delete Child"
+          message="Are you sure you want to delete this child? This action cannot be undone."
+          confirmText="Delete"
+          cancelText="Cancel"
+          confirmButtonClass="btn btn-danger"
+        />
+        <div className="layout-content">
+          {children}
+        </div>
         {/* Add Child/Chore buttons (demo, move to UI as needed) */}
-        <div style={{ position: 'fixed', bottom: 10, right: 10, zIndex: 2000 }}>
-          <button className="btn btn-primary" onClick={openAddChildModal} style={{marginRight: 4}}>+ Add Child</button>
-          <button className="btn btn-primary" onClick={openAddUnifiedTaskModal}>+ Add Chore</button>
+        <div style={{ position: 'fixed', bottom: 10, right: 10, zIndex: 2000, pointerEvents: 'auto' }}>
+          <button className="btn btn-primary" onClick={openAddChildModal} style={{marginRight: 4, pointerEvents: 'auto'}} data-tour="add-child-button">+ Add Child</button>
+          <button className="btn btn-primary" onClick={openAddUnifiedTaskModal} style={{pointerEvents: 'auto'}} data-tour="add-task-button">+ Add Chore</button>
         </div>
       </div>
     </ModalControlContext.Provider>

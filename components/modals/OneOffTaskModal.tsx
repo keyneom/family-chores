@@ -1,5 +1,7 @@
-import React, { useState } from "react";
-import { useChoresApp, OneOffTask } from "../ChoresAppContext";
+import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { useChoresApp } from "../ChoresAppContext";
+import { Task } from "../../types/task";
 
 interface OneOffTaskModalProps {
   open: boolean;
@@ -16,28 +18,50 @@ export default function OneOffTaskModal({ open, onClose, childId }: OneOffTaskMo
   const [moneyReward, setMoneyReward] = useState(0.5);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [taskType, setTaskType] = useState<'any-child' | 'first-come' | 'all-children'>('any-child');
+  const [mounted, setMounted] = useState(false);
 
-  if (!open) return null;
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  if (!open || !mounted) return null;
 
   const handleSave = () => {
     if (!name.trim()) return;
     
-    const task: OneOffTask = {
-      id: Date.now(),
-      name: name.trim(),
+    // Create unified Task with oneOff property
+    const task: Task = {
+      id: `oneoff_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      title: name.trim(),
       emoji: emoji || "📝",
       color,
-      starReward,
-      moneyReward,
-      date,
-      type: taskType,
-      assignedTo: taskType === 'any-child' && childId ? childId : undefined,
+      stars: starReward,
+      money: moneyReward,
+      type: 'oneoff',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      description: '',
+      requirePin: false,
+      oneOff: { dueDate: date },
+      assignedTo: taskType === 'any-child' && childId ? String(childId) : undefined,
     };
     
-    dispatch({
-      type: 'ADD_ONE_OFF_TASK',
-      payload: { date, task }
-    });
+    // Create instance for the one-off task
+    const instanceId = `instance_${task.id}_${childId || 0}_${date}`;
+    const instance = {
+      id: instanceId,
+      templateId: task.id,
+      childId: childId || 0,
+      date: date,
+      stars: task.stars,
+      money: task.money,
+      completed: false,
+      createdAt: new Date().toISOString(),
+    };
+    
+    dispatch({ type: 'ADD_TASK', payload: task });
+    dispatch({ type: 'ADD_TASK_INSTANCE', payload: instance });
     
     // Reset form
     setName("");
@@ -50,12 +74,12 @@ export default function OneOffTaskModal({ open, onClose, childId }: OneOffTaskMo
     onClose();
   };
 
-  return (
-    <div className="modal" style={{ display: "block" }}>
-      <div className="modal-content">
+  const modalContent = (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>➕ Add One-off Task</h2>
-          <span className="close" onClick={onClose}>&times;</span>
+          <span className="close" onClick={(e) => { e.stopPropagation(); onClose(); }}>&times;</span>
         </div>
         <div className="modal-body">
           <div className="input-group">
@@ -122,10 +146,12 @@ export default function OneOffTaskModal({ open, onClose, childId }: OneOffTaskMo
           </div>
         </div>
         <div className="modal-footer">
-          <button className="btn btn-primary" onClick={handleSave}>Add Task</button>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); handleSave(); }}>Add Task</button>
+          <button className="btn btn-secondary" onClick={(e) => { e.stopPropagation(); onClose(); }}>Cancel</button>
         </div>
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }

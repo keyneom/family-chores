@@ -1,10 +1,28 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useChoresApp } from "../ChoresAppContext";
+import AlertModal from "./AlertModal";
+import ConfirmationModal from "./ConfirmationModal";
+import PinModal from "./PinModal";
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
 }
+
+type ApproverErrors = {
+  handle?: string;
+  pin?: string;
+  confirm?: string;
+};
+
+type ToastMessage = {
+  id: string;
+  message: string;
+  type: 'success' | 'info' | 'error';
+  dismissible?: boolean;
+  durationMs?: number;
+};
 
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const { state, dispatch } = useChoresApp();
@@ -21,43 +39,117 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [newPinHandle, setNewPinHandle] = useState("");
   const [newPinCode, setNewPinCode] = useState("");
   const [newPinConfirm, setNewPinConfirm] = useState("");
-  const [verifyExistingHandle, setVerifyExistingHandle] = useState("");
-  const [verifyExistingPin, setVerifyExistingPin] = useState("");
   const [showAddApproverInline, setShowAddApproverInline] = useState(false);
   const [pendingApprovalKey, setPendingApprovalKey] = useState<null | keyof typeof state.parentSettings.approvals>(null);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertMessage, setAlertMessage] = useState("");
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const toastTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [approverErrors, setApproverErrors] = useState<ApproverErrors>({});
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalMessage, setPinModalMessage] = useState<string | undefined>();
+  const pinModalActionRef = useRef<((actorHandle?: string) => void) | null>(null);
+  const [localApprovals, setLocalApprovals] = useState(state.parentSettings.approvals);
 
-  if (!open) return null;
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  // Reset local approvals when modal opens
+  useEffect(() => {
+    if (open) {
+      setLocalApprovals(state.parentSettings.approvals);
+    }
+  }, [open, state.parentSettings.approvals]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(toastTimeoutsRef.current).forEach(timeoutId => clearTimeout(timeoutId));
+      toastTimeoutsRef.current = {};
+    };
+  }, []);
+
+  if (!open || !mounted) return null;
 
   const handleAddChild = () => {
-    if (newChildName.trim()) {
-      dispatch({
-        type: "ADD_CHILD",
-        payload: {
-          id: Date.now(),
-          name: newChildName.trim(),
-          stars: 0,
-          money: 0,
-          blockchainAddress: newChildBlockchain || undefined,
-        }
+    if (!newChildName.trim()) return;
+    
+    // Check if approval is required for editing tasks and children
+    const requiresApproval = state.parentSettings.approvals.editTasks;
+    const approvers = state.parentSettings.pins || [];
+    
+    if (requiresApproval) {
+      if (approvers.length === 0) {
+        showAlert('Adding children requires parent approval, but no approvers are defined. Please add an approver first.');
+        return;
+      }
+      requestPinVerification('Enter a parent PIN to add a child.', (actorHandle) => {
+        dispatch({
+          type: "ADD_CHILD",
+          payload: {
+            id: Date.now(),
+            name: newChildName.trim(),
+            stars: 0,
+            money: 0,
+            blockchainAddress: newChildBlockchain || undefined,
+          },
+        });
+        setNewChildName("");
+        setNewChildBlockchain("");
+        showToast('Child added', 'success');
       });
-      setNewChildName("");
-      setNewChildBlockchain("");
+      return;
     }
+    
+    // No approval required
+    dispatch({
+      type: "ADD_CHILD",
+      payload: {
+        id: Date.now(),
+        name: newChildName.trim(),
+        stars: 0,
+        money: 0,
+        blockchainAddress: newChildBlockchain || undefined,
+      }
+    });
+    setNewChildName("");
+    setNewChildBlockchain("");
   };
 
   const handleAddChore = () => {
-    if (newChoreName.trim()) {
-      const chore = {
-        id: Date.now(),
-        name: newChoreName.trim(),
+    if (!newChoreName.trim()) return;
+    
+    // Check if approval is required for editing tasks and children
+    const requiresApproval = state.parentSettings.approvals.editTasks;
+    const approvers = state.parentSettings.pins || [];
+    
+    const createTask = () => {
+      // Create unified Task with recurring property
+      const task = {
+        id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        title: newChoreName.trim(),
         emoji: newChoreEmoji || "📝",
         color: newChoreColor,
         stars: newChoreStars,
         money: newChoreMoney,
-        recurrence: choreRecurrence,
-        customDays: choreRecurrence === "custom-days" ? customDays : undefined
+        type: 'recurring' as const,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        description: '',
+        requirePin: false,
+        recurring: {
+          cadence: (choreRecurrence === 'weekdays' ? 'weekdays' :
+                   choreRecurrence === 'weekends' ? 'weekends' :
+                   choreRecurrence === 'custom-days' ? 'custom-days' :
+                   choreRecurrence === 'weekly' ? 'weekly' :
+                   choreRecurrence === 'monthly' ? 'monthly' : 'daily') as 'daily' | 'weekly' | 'monthly' | 'weekdays' | 'weekends' | 'custom-days',
+          customDays: choreRecurrence === "custom-days" ? customDays : undefined
+        }
       };
-      dispatch({ type: "ADD_CHORE_TEMPLATE", payload: chore });
+      dispatch({ type: "ADD_TASK", payload: task });
       setNewChoreName("");
       setNewChoreEmoji("");
       setNewChoreColor("#FFB6C1");
@@ -65,15 +157,30 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       setNewChoreMoney(0.5);
       setChoreRecurrence("daily");
       setCustomDays([]);
+      showToast('Task added', 'success');
+    };
+    
+    if (requiresApproval) {
+      if (approvers.length === 0) {
+        showAlert('Adding tasks requires parent approval, but no approvers are defined. Please add an approver first.');
+        return;
+      }
+      requestPinVerification('Enter a parent PIN to add a task.', (actorHandle) => {
+        createTask();
+      });
+      return;
     }
+    
+    // No approval required
+    createTask();
   };
 
   const handleDeleteChild = (childId: number) => {
     dispatch({ type: "DELETE_CHILD", payload: childId });
   };
 
-  const handleDeleteChore = (choreId: number) => {
-    dispatch({ type: "DELETE_CHORE_TEMPLATE", payload: choreId });
+  const handleDeleteChore = (taskId: string) => {
+    dispatch({ type: "DELETE_TASK", payload: taskId });
   };
 
   const handleCustomDayChange = (day: number, checked: boolean) => {
@@ -86,90 +193,202 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   // legacy single PIN removed — no handler
 
-  const handleAddPin = async () => {
-    if (!newPinHandle.trim()) return alert('Enter a handle');
-    if (newPinCode !== newPinConfirm) return alert('PINs do not match');
-    if (!/^[0-9]{4}$/.test(newPinCode)) return alert('PIN must be 4 digits');
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+    if (toastTimeoutsRef.current[id]) {
+      clearTimeout(toastTimeoutsRef.current[id]);
+      delete toastTimeoutsRef.current[id];
+    }
+  };
+
+  const showToast = (
+    message: string,
+    type: 'success' | 'info' | 'error' = 'info',
+    options: { dismissible?: boolean; durationMs?: number } = {}
+  ) => {
+    const toast: ToastMessage = {
+      id: `toast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      message,
+      type,
+      dismissible: options.dismissible,
+      durationMs: options.durationMs,
+    };
+    setToasts(prev => [...prev, toast]);
+
+    if (!options.dismissible) {
+      const timeout = setTimeout(() => removeToast(toast.id), options.durationMs ?? 4000);
+      toastTimeoutsRef.current[toast.id] = timeout;
+    }
+  };
+
+  const clearApproverError = (field: keyof ApproverErrors) => {
+    setApproverErrors(prev => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const requestPinVerification = (message: string, onVerified: (actorHandle?: string) => void) => {
+    setPinModalMessage(message);
+    pinModalActionRef.current = onVerified;
+    setPinModalOpen(true);
+  };
+
+  const handlePinModalClose = () => {
+    pinModalActionRef.current = null;
+    setPinModalOpen(false);
+  };
+
+  const handlePinModalSuccess = (actorHandle?: string) => {
+    pinModalActionRef.current?.(actorHandle);
+    pinModalActionRef.current = null;
+    setPinModalOpen(false);
+  };
+
+  const handleAddPin = async (): Promise<boolean> => {
+    const trimmedHandle = newPinHandle.trim();
+    const pinPattern = /^[0-9]{4,12}$/;
+    const errors: ApproverErrors = {};
     const existing = state.parentSettings.pins || [];
-    const proceedToAdd = async () => {
+
+    if (!trimmedHandle) {
+      errors.handle = 'Enter an approver handle';
+    }
+    if (!pinPattern.test(newPinCode)) {
+      errors.pin = 'PIN must be 4-12 digits';
+    }
+    if (!pinPattern.test(newPinConfirm)) {
+      errors.confirm = 'Confirm PIN using 4-12 digits';
+    } else if (pinPattern.test(newPinCode) && newPinCode !== newPinConfirm) {
+      errors.confirm = 'PINs must match';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setApproverErrors(errors);
+      return false;
+    }
+
+    setApproverErrors({});
+
+    const attemptAdd = async (actorHandle?: string) => {
       try {
         const { genSalt, hashPin } = await import('../../utils/pinUtils');
+        for (const entry of existing) {
+          const hashed = await hashPin(newPinCode, entry.salt);
+          if (hashed === entry.pinHash) {
+            setApproverErrors(prev => ({ ...prev, pin: 'PIN already in use by another approver' }));
+            return false;
+          }
+        }
         const salt = await genSalt();
         const pinHash = await hashPin(newPinCode, salt);
-        const updated = [ ...existing.filter(p => p.handle !== newPinHandle.trim()), { handle: newPinHandle.trim(), pinHash, salt } ];
-        dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated } });
+        const updated = [ ...existing.filter(p => p.handle !== trimmedHandle), { handle: trimmedHandle, pinHash, salt } ];
+        dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated }, actorHandle });
         setNewPinHandle(''); setNewPinCode(''); setNewPinConfirm('');
-        alert('Approver added');
+        setApproverErrors({});
+        showToast('Approver added', 'success');
+        if (pendingApprovalKey) {
+          dispatch({
+            type: 'UPDATE_PARENT_SETTINGS',
+            payload: { approvals: { ...state.parentSettings.approvals, [pendingApprovalKey]: true } },
+            actorHandle
+          });
+          setPendingApprovalKey(null);
+        }
+        setShowAddApproverInline(false);
+        return true;
       } catch (e) {
         console.error('pin add error', e);
-        alert('Failed to add approver');
+        showAlert('Failed to add approver');
+        return false;
       }
     };
 
     if (existing.length > 0) {
-      // require verification using an existing approver before adding a new one
-      if (!verifyExistingHandle) return alert('Select an existing approver to authorize this change');
-      if (!/^[0-9]{4}$/.test(verifyExistingPin)) return alert('Enter current approver PIN (4 digits)');
-      try {
-        const { hashPin } = await import('../../utils/pinUtils');
-        const chosen = existing.find(p => p.handle === verifyExistingHandle);
-        if (!chosen) return alert('Selected approver not found');
-        const h = await hashPin(verifyExistingPin, chosen.salt);
-        if (h !== chosen.pinHash) return alert('Existing approver PIN is incorrect');
-        await proceedToAdd();
-        // if we were opening the inline modal to enable a specific approval, enable it now
-        if (pendingApprovalKey) {
-          dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [pendingApprovalKey]: true } } });
-          setPendingApprovalKey(null);
-        }
-      } catch (e) {
-        console.error('verify error', e);
-        alert('Verification failed');
-      }
-    } else {
-      await proceedToAdd();
-      if (pendingApprovalKey) {
-        dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [pendingApprovalKey]: true } } });
-        setPendingApprovalKey(null);
-      }
+      requestPinVerification('Enter an existing parent PIN to add another approver.', (actorHandle) => {
+        attemptAdd(actorHandle);
+      });
+      return false;
     }
+
+    return attemptAdd();
   };
 
   const handleRemovePin = (handle: string) => {
     if (!confirm(`Remove approver ${handle}?`)) return;
-    const existing = state.parentSettings.pins || [];
-    const updated = existing.filter(p => p.handle !== handle);
-    dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated } });
+    requestPinVerification('Enter a parent PIN to remove an approver.', (actorHandle) => {
+      const existing = state.parentSettings.pins || [];
+      const updated = existing.filter(p => p.handle !== handle);
+      dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { pins: updated }, actorHandle });
+      showToast('Approver removed', 'info');
+    });
   };
 
   const handleToggleApproval = (key: keyof typeof state.parentSettings.approvals, enabled: boolean) => {
-    const approvers = state.parentSettings.pins || [];
-    if (enabled && approvers.length === 0) {
-      // Open inline add-approver prompt so the user can create the first approver now
-      setPendingApprovalKey(key);
-      setShowAddApproverInline(true);
-      return;
-    }
-    dispatch({ type: 'UPDATE_PARENT_SETTINGS', payload: { approvals: { ...state.parentSettings.approvals, [key]: enabled } } });
+    // Update local state only
+    setLocalApprovals(prev => ({ ...prev, [key]: enabled }));
   };
 
   const handleSaveSettings = () => {
-    // Save any pending settings
+    // Check if any approvals changed
+    const approvalsChanged = JSON.stringify(localApprovals) !== JSON.stringify(state.parentSettings.approvals);
+    
+    if (approvalsChanged) {
+      // Check if enabling any approval requires approvers
+      const approvers = state.parentSettings.pins || [];
+      const enablingApprovals = Object.keys(localApprovals).filter(
+        key => localApprovals[key as keyof typeof localApprovals] && 
+               !state.parentSettings.approvals[key as keyof typeof state.parentSettings.approvals]
+      );
+      
+      if (enablingApprovals.length > 0 && approvers.length === 0) {
+        showAlert('Enabling approval requirements requires at least one approver. Please add an approver first.');
+        return;
+      }
+      
+      // Save approval settings
+      dispatch({
+        type: 'UPDATE_PARENT_SETTINGS',
+        payload: { approvals: localApprovals }
+      });
+      showToast('Settings saved', 'success');
+    }
+    
     onClose();
   };
 
   const handleResetData = () => {
-    if (confirm("Are you sure you want to reset all data? This cannot be undone.")) {
-      dispatch({ type: "RESET_ALL_DATA" });
-    }
+    setResetConfirmOpen(true);
   };
 
-  return (
-    <div className="modal" style={{ display: "block" }}>
-      <div className="modal-content">
+  const confirmResetData = () => {
+    dispatch({ type: "RESET_ALL_DATA" });
+  };
+
+  const handleRestartTutorial = () => {
+    dispatch({
+      type: 'UPDATE_PARENT_SETTINGS',
+      payload: {
+        onboardingCompleted: false,
+      },
+    });
+    showToast('Tutorial will restart when you close settings', 'info');
+  };
+
+  const showAlert = (message: string) => {
+    setAlertMessage(message);
+    setAlertOpen(true);
+  };
+
+  const modalContent = (
+    <>
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>⚙️ Settings</h2>
-          <span className="close" onClick={onClose}>&times;</span>
+          <span className="close" onClick={(e) => { e.stopPropagation(); onClose(); }}>&times;</span>
         </div>
         <div className="modal-body">
           <div className="settings-section">
@@ -179,16 +398,16 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               <div className="approval-settings">
                 <h4>Require Parent Approval For:</h4>
                 <label>
-                  <input type="checkbox" checked={state.parentSettings.approvals.taskMove} onChange={(e) => handleToggleApproval('taskMove', e.target.checked)} /> Moving tasks between children
+                  <input type="checkbox" checked={localApprovals.taskMove} onChange={(e) => handleToggleApproval('taskMove', e.target.checked)} /> Moving tasks between children
                 </label>
                 <label>
-                  <input type="checkbox" checked={state.parentSettings.approvals.earlyComplete} onChange={(e) => handleToggleApproval('earlyComplete', e.target.checked)} /> Completing tasks early
+                  <input type="checkbox" checked={localApprovals.earlyComplete} onChange={(e) => handleToggleApproval('earlyComplete', e.target.checked)} /> Completing tasks early
                 </label>
                 <label>
-                  <input type="checkbox" checked={state.parentSettings.approvals.taskComplete} onChange={(e) => handleToggleApproval('taskComplete', e.target.checked)} /> Marking any task complete
+                  <input type="checkbox" checked={localApprovals.taskComplete} onChange={(e) => handleToggleApproval('taskComplete', e.target.checked)} /> Marking any task complete
                 </label>
                 <label>
-                  <input type="checkbox" checked={state.parentSettings.approvals.editTasks} onChange={(e) => handleToggleApproval('editTasks', e.target.checked)} /> Editing tasks and children
+                  <input type="checkbox" checked={localApprovals.editTasks} onChange={(e) => handleToggleApproval('editTasks', e.target.checked)} /> Editing tasks and children
                 </label>
               </div>
               <div className="approver-list" style={{ marginTop: 12 }}>
@@ -203,11 +422,55 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                     </div>
                   ))
                 )}
-                <div style={{ marginTop: 8 }}>
-                  <input placeholder="Handle (e.g. Dad)" value={newPinHandle} onChange={e => setNewPinHandle(e.target.value)} />
-                    <input placeholder="PIN" type="password" maxLength={4} style={{ marginLeft: 8 }} value={newPinCode} onChange={e => setNewPinCode(e.target.value)} />
-                    <input placeholder="Confirm" type="password" maxLength={4} style={{ marginLeft: 8 }} value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)} />
-                    <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={handleAddPin}>Add Approver</button>
+                <div style={{ marginTop: 8 }} data-tour="approver-form">
+                  <div style={{ marginBottom: 8 }}>
+                    <input 
+                      placeholder="Handle (e.g. Dad)" 
+                      value={newPinHandle} 
+                      onChange={e => { setNewPinHandle(e.target.value); clearApproverError('handle'); }} 
+                      data-tour="approver-handle-input"
+                      aria-invalid={approverErrors.handle ? 'true' : undefined}
+                      style={{ width: '100%', marginBottom: 8 }}
+                    />
+                    {approverErrors.handle && <div className="input-error">{approverErrors.handle}</div>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <input 
+                        placeholder="PIN (4-12 digits)" 
+                        type="password" 
+                        minLength={4}
+                        maxLength={12} 
+                        value={newPinCode} 
+                        onChange={e => { setNewPinCode(e.target.value); clearApproverError('pin'); }} 
+                        data-tour="approver-pin-input"
+                        aria-invalid={approverErrors.pin ? 'true' : undefined}
+                        style={{ width: '120px' }}
+                      />
+                      {approverErrors.pin && <div className="input-error">{approverErrors.pin}</div>}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <input 
+                        placeholder="Confirm PIN" 
+                        type="password" 
+                        minLength={4}
+                        maxLength={12} 
+                        value={newPinConfirm} 
+                        onChange={e => { setNewPinConfirm(e.target.value); clearApproverError('confirm'); }} 
+                        data-tour="approver-confirm-input"
+                        aria-invalid={approverErrors.confirm ? 'true' : undefined}
+                        style={{ width: '120px' }}
+                      />
+                      {approverErrors.confirm && <div className="input-error">{approverErrors.confirm}</div>}
+                    </div>
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={handleAddPin} 
+                      data-tour="add-approver-button"
+                    >
+                      Add Approver
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -220,17 +483,51 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                       </div>
                       <div className="modal-body">
                         <div style={{ marginBottom: 8 }}>No approvers found — create the first approver to enable approval flows.</div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <input placeholder="Handle (e.g. Parent)" value={newPinHandle} onChange={e => setNewPinHandle(e.target.value)} />
-                          <input placeholder="PIN" type="password" maxLength={4} value={newPinCode} onChange={e => setNewPinCode(e.target.value)} />
-                          <input placeholder="Confirm" type="password" maxLength={4} value={newPinConfirm} onChange={e => setNewPinConfirm(e.target.value)} />
+                        <div style={{ marginBottom: 8 }}>
+                          <input 
+                            placeholder="Handle (e.g. Parent)" 
+                            value={newPinHandle} 
+                            onChange={e => { setNewPinHandle(e.target.value); clearApproverError('handle'); }} 
+                            aria-invalid={approverErrors.handle ? 'true' : undefined}
+                            style={{ width: '100%', marginBottom: 8 }}
+                          />
+                          {approverErrors.handle && <div className="input-error">{approverErrors.handle}</div>}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <input 
+                              placeholder="PIN (4-12 digits)" 
+                              type="password" 
+                              minLength={4}
+                              maxLength={12} 
+                              value={newPinCode} 
+                              onChange={e => { setNewPinCode(e.target.value); clearApproverError('pin'); }} 
+                              aria-invalid={approverErrors.pin ? 'true' : undefined}
+                              style={{ width: '120px' }}
+                            />
+                            {approverErrors.pin && <div className="input-error">{approverErrors.pin}</div>}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <input 
+                              placeholder="Confirm PIN" 
+                              type="password" 
+                              minLength={4}
+                              maxLength={12} 
+                              value={newPinConfirm} 
+                              onChange={e => { setNewPinConfirm(e.target.value); clearApproverError('confirm'); }} 
+                              aria-invalid={approverErrors.confirm ? 'true' : undefined}
+                              style={{ width: '120px' }}
+                            />
+                            {approverErrors.confirm && <div className="input-error">{approverErrors.confirm}</div>}
+                          </div>
                         </div>
                       </div>
                       <div className="modal-footer">
                         <button className="btn btn-primary" onClick={async () => {
-                          await handleAddPin();
-                          // if added, close inline modal and enable all approvals unchecked (user can toggle)
-                          setShowAddApproverInline(false);
+                          const success = await handleAddPin();
+                          if (success) {
+                            setShowAddApproverInline(false);
+                          }
                         }}>Create Approver</button>
                         <button className="btn btn-secondary" onClick={() => setShowAddApproverInline(false)}>Cancel</button>
                       </div>
@@ -238,18 +535,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   </div>
                 )}
           </div>
-                  {state.parentSettings.pins && state.parentSettings.pins.length > 0 && (
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ marginBottom: 6 }}>To add a new approver, enter an existing approver handle and PIN to authorize this change.</div>
-                      <select value={verifyExistingHandle} onChange={e => setVerifyExistingHandle(e.target.value)}>
-                        <option value="">-- Select approver --</option>
-                        {state.parentSettings.pins!.map(p => (
-                          <option key={p.handle} value={p.handle}>{p.handle}</option>
-                        ))}
-                      </select>
-                      <input type="password" placeholder="Existing approver PIN" maxLength={4} style={{ marginLeft: 8 }} value={verifyExistingPin} onChange={e => setVerifyExistingPin(e.target.value)} />
-                    </div>
-                  )}
+                {/* Additional approver verification happens on demand via PIN modal */}
 
           <div className="settings-section">
             <h3>👥 Children</h3>
@@ -257,17 +543,80 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               {state.children.length === 0 ? (
                 <div className="empty-state">No children added yet. Add your first child below.</div>
               ) : (
-                state.children.map((child) => (
-                  <div key={child.id} className="child-item">
-                    <div className="child-info">
-                      <span className="child-name">{child.name}</span>
-                      <div style={{ fontSize: '0.8rem', color: '#666' }}>{child.blockchainAddress || <em>No address</em>}</div>
-                    </div>
-                    <div className="child-actions">
-                      <button className="btn btn-small btn-danger" onClick={() => handleDeleteChild(child.id)}>Delete</button>
-                    </div>
-                  </div>
-                ))
+                (() => {
+                  // Ensure we have a complete order that includes all children
+                  const existingOrder = state.parentSettings.childDisplayOrder || [];
+                  const allChildIds = state.children.map(c => c.id);
+                  
+                  // Build complete order: use existing order, then add any missing children
+                  const currentOrder = [
+                    ...existingOrder.filter(id => allChildIds.includes(id)),
+                    ...allChildIds.filter(id => !existingOrder.includes(id))
+                  ];
+                  
+                  const orderedChildren = currentOrder
+                    .map(id => state.children.find(c => c.id === id))
+                    .filter((c): c is typeof state.children[0] => c !== undefined);
+                  
+                  return orderedChildren.map((child, index) => {
+                    const canMoveUp = index > 0;
+                    const canMoveDown = index < orderedChildren.length - 1;
+                    
+                    const handleMoveUp = () => {
+                      const newOrder = [...currentOrder];
+                      const currentIndex = newOrder.indexOf(child.id);
+                      if (currentIndex > 0) {
+                        [newOrder[currentIndex - 1], newOrder[currentIndex]] = [newOrder[currentIndex], newOrder[currentIndex - 1]];
+                        dispatch({
+                          type: 'UPDATE_PARENT_SETTINGS',
+                          payload: { childDisplayOrder: newOrder },
+                        });
+                      }
+                    };
+                    
+                    const handleMoveDown = () => {
+                      const newOrder = [...currentOrder];
+                      const currentIndex = newOrder.indexOf(child.id);
+                      if (currentIndex < newOrder.length - 1) {
+                        [newOrder[currentIndex], newOrder[currentIndex + 1]] = [newOrder[currentIndex + 1], newOrder[currentIndex]];
+                        dispatch({
+                          type: 'UPDATE_PARENT_SETTINGS',
+                          payload: { childDisplayOrder: newOrder },
+                        });
+                      }
+                    };
+                    
+                    return (
+                      <div key={child.id} className="child-item">
+                        <div className="child-info">
+                          <span className="child-name">{child.name}</span>
+                          <div style={{ fontSize: '0.8rem', color: '#666' }}>{child.blockchainAddress || <em>No address</em>}</div>
+                        </div>
+                        <div className="child-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                          <button 
+                            className="btn btn-small" 
+                            onClick={handleMoveUp}
+                            disabled={!canMoveUp}
+                            title="Move up"
+                            style={{ opacity: canMoveUp ? 1 : 0.5, cursor: canMoveUp ? 'pointer' : 'not-allowed' }}
+                          >
+                            ↑
+                          </button>
+                          <button 
+                            className="btn btn-small" 
+                            onClick={handleMoveDown}
+                            disabled={!canMoveDown}
+                            title="Move down"
+                            style={{ opacity: canMoveDown ? 1 : 0.5, cursor: canMoveDown ? 'pointer' : 'not-allowed' }}
+                          >
+                            ↓
+                          </button>
+                          <button className="btn btn-small btn-danger" onClick={() => handleDeleteChild(child.id)}>Delete</button>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
             <div className="input-group">
@@ -289,24 +638,45 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           </div>
 
           <div className="settings-section">
-            <h3>📝 Chores</h3>
+            <h3>📝 Tasks</h3>
             <div>
-              {!state.choreTemplates || state.choreTemplates.length === 0 ? (
-                <div className="empty-state">No chore templates created yet. Add your first chore below.</div>
+              {!state.tasks || state.tasks.length === 0 ? (
+                <div className="empty-state">No tasks created yet. Add your first task below.</div>
               ) : (
-                state.choreTemplates.map((chore) => (
-                  <div key={chore.id} className="chore-item">
-                    <div className="chore-info">
-                      <span>{chore.emoji} {chore.name}</span>
-                      <div style={{ fontSize: "0.8rem", color: "#666" }}>
-                        ⭐ {chore.stars} | 💰 ${chore.money} | {chore.recurrence}
+                state.tasks
+                  .filter(task => task.type === 'recurring' || task.recurring) // Show recurring tasks
+                  .map((task) => {
+                    const cadence = task.recurring?.cadence || 'daily';
+                    let recurrenceDesc: string;
+                    if (cadence === 'custom-days' && task.recurring?.customDays && task.recurring.customDays.length > 0) {
+                      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                      const selectedDays = task.recurring.customDays.map(d => dayNames[d]).join(', ');
+                      recurrenceDesc = selectedDays;
+                    } else if (cadence === 'weekdays') {
+                      recurrenceDesc = 'Weekdays only';
+                    } else if (cadence === 'weekends') {
+                      recurrenceDesc = 'Weekends only';
+                    } else if (cadence === 'weekly') {
+                      recurrenceDesc = 'Weekly';
+                    } else if (cadence === 'monthly') {
+                      recurrenceDesc = 'Monthly';
+                    } else {
+                      recurrenceDesc = 'Daily';
+                    }
+                    return (
+                      <div key={task.id} className="chore-item">
+                        <div className="chore-info">
+                          <span>{task.emoji || '📝'} {task.title}</span>
+                          <div style={{ fontSize: "0.8rem", color: "#666" }}>
+                            ⭐ {task.stars || 0} | 💰 ${task.money || 0} | {recurrenceDesc}
+                          </div>
+                        </div>
+                        <div className="chore-actions">
+                          <button className="btn btn-small btn-danger" onClick={() => handleDeleteChore(task.id)}>Delete</button>
+                        </div>
                       </div>
-                    </div>
-                    <div className="chore-actions">
-                      <button className="btn btn-small btn-danger" onClick={() => handleDeleteChore(chore.id)}>Delete</button>
-                    </div>
-                  </div>
-                ))
+                    );
+                  })
               )}
             </div>
             <div className="add-chore-form">
@@ -324,29 +694,41 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                   value={newChoreEmoji}
                   onChange={(e) => setNewChoreEmoji(e.target.value)}
                 />
-                <input
-                  type="color"
-                  value={newChoreColor}
-                  onChange={(e) => setNewChoreColor(e.target.value)}
-                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>Color:</span>
+                  <input
+                    type="color"
+                    value={newChoreColor}
+                    onChange={(e) => setNewChoreColor(e.target.value)}
+                    aria-label="Task color"
+                  />
+                </label>
               </div>
               <div className="input-group">
-                <input
-                  type="number"
-                  placeholder="Stars"
-                  min={1}
-                  max={5}
-                  value={newChoreStars}
-                  onChange={(e) => setNewChoreStars(Number(e.target.value))}
-                />
-                <input
-                  type="number"
-                  placeholder="Money ($)"
-                  min={0}
-                  step={0.25}
-                  value={newChoreMoney}
-                  onChange={(e) => setNewChoreMoney(Number(e.target.value))}
-                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>Star Reward:</span>
+                  <input
+                    type="number"
+                    placeholder="Stars"
+                    min={1}
+                    max={5}
+                    value={newChoreStars}
+                    onChange={(e) => setNewChoreStars(Number(e.target.value))}
+                    aria-label="Star reward"
+                  />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>Money Reward:</span>
+                  <input
+                    type="number"
+                    placeholder="Money ($)"
+                    min={0}
+                    step={0.25}
+                    value={newChoreMoney}
+                    onChange={(e) => setNewChoreMoney(Number(e.target.value))}
+                    aria-label="Money reward"
+                  />
+                </label>
               </div>
               <div className="recurrence-group">
                 <label htmlFor="choreRecurrence">Repeat:</label>
@@ -386,9 +768,57 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-primary" onClick={handleSaveSettings}>Save Settings</button>
+          <button className="btn btn-secondary" onClick={handleRestartTutorial}>Restart Tutorial</button>
           <button className="btn btn-danger" onClick={handleResetData}>Reset All Data</button>
         </div>
       </div>
-    </div>
+        <AlertModal
+          open={alertOpen}
+          onClose={() => setAlertOpen(false)}
+          title="Notice"
+          message={alertMessage}
+        />
+        <ConfirmationModal
+          open={resetConfirmOpen}
+          onClose={() => setResetConfirmOpen(false)}
+          onConfirm={confirmResetData}
+          title="Reset All Data"
+          message="Are you sure you want to reset all data? This cannot be undone. All children, tasks, and settings will be deleted."
+          confirmText="Reset All Data"
+          cancelText="Cancel"
+          confirmButtonClass="btn btn-danger"
+        />
+      </div>
+      {toasts.length > 0 && (
+        <div className="toast-container" aria-live="polite" aria-atomic="true">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`toast toast-${toast.type}`}
+              role="status"
+            >
+              <span>{toast.message}</span>
+              {toast.dismissible && (
+                <button
+                  className="toast-close"
+                  onClick={() => removeToast(toast.id)}
+                  aria-label="Dismiss notification"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <PinModal
+        open={pinModalOpen}
+        onClose={handlePinModalClose}
+        onSuccess={handlePinModalSuccess}
+        message={pinModalMessage}
+      />
+    </>
   );
+
+  return createPortal(modalContent, document.body);
 }

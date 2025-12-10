@@ -1,7 +1,7 @@
 import React from "react";
 
 export const ModalControlContext = React.createContext<{
-  openTaskEditModal: (taskId: string | number) => void;
+  openTaskEditModal: (taskId: string | number, editOption?: 'instance' | 'future' | 'template', instanceId?: string) => void;
   openAddTaskModal: (childId: number) => void;
   openEditChildModal: (childId: number) => void;
   openAddChildModal: () => void;

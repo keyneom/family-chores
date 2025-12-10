@@ -48,7 +48,7 @@ export default function Header({ onSettingsClick, onSyncClick }: HeaderProps) {
         <div className="date-display">
           <DateDisplay />
         </div>
-        <button id="settingsBtn" className="btn btn-primary" onClick={onSettingsClick}>
+        <button id="settingsBtn" className="btn btn-primary" onClick={onSettingsClick} data-tour="settings-button">
           ⚙️ Settings
         </button>
         <button id="syncBtn" className="btn btn-secondary" onClick={onSyncClick}>
@@ -60,7 +60,7 @@ export default function Header({ onSettingsClick, onSyncClick }: HeaderProps) {
               {address ? `${String(address).slice(0,6)}...${String(address).slice(-4)}` : 'Wallet'}
             </button>
           ) : (
-            <button className="btn btn-wallet" onClick={handleConnect}>
+            <button className="btn btn-wallet" onClick={handleConnect} data-tour="wallet-button">
               Connect Wallet
             </button>
           )}

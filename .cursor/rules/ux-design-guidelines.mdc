@@ -1,0 +1,55 @@
+---
+alwaysApply: true
+---
+
+# UX Design + Testing Guidelines
+
+Ground these decisions in established references (Nielsen Norman heuristics, Apple Human Interface Guidelines, Google Material, and WCAG 2.1 AA). Each feature should be evaluated against the following principles:
+
+1. **Single focus & modality** – keep only one actionable modal/overlay on screen. Use progressive disclosure; close previous surfaces before opening new ones (Apple HIG, Material).
+2. **Discoverability & clarity** – label controls clearly, keep critical actions visible in context, and avoid hidden states. Provide inline helper text/tooltips when needed (Nielsen Norman, Apple HIG).
+3. **Consistent patterns & spacing** – reuse established layout, spacing, and motion patterns for familiarity and rhythm (Material Design system, Apple HIG). Avoid ad‑hoc styling that breaks grid alignment.
+4. **Immediate, meaningful feedback** – every action produces visible confirmation (toasts, inline states) without blocking the next step. Use non-blocking success toasts and concise inline errors (Nielsen Norman heuristic “Visibility of system status”).
+5. **Accessibility first** – meet WCAG 2.1 AA: sufficient color contrast, focus indicators, semantic structure, keyboard/assistive support, and reduced-motion friendly animations.
+6. **Safe actions & undo** – confirm destructive operations and prefer reversible actions where possible. Show who authorized PIN-gated changes in the activity log (Nielsen Norman “Error prevention / recovery”).
+7. **Responsiveness & performance** – UI updates must feel snappy (<100 ms for simple feedback, <1 s for navigation), with skeletons or progress indicators if slower (Apple HIG, Material motion guidance).
+
+## Testing Process
+
+**CRITICAL FOR AI AGENTS**: These steps must be followed in order, without skipping. Use browser automation tools to execute each step.
+
+Before signing off any UX change (especially onboarding/tutorial workflows):
+
+1. **Reset state** – ALWAYS clear `localStorage` first:
+   ```javascript
+   // Execute in browser: localStorage.clear()
+   // Then reload the page: navigate to http://localhost:3000/family-chores
+   ```
+   - Use `browser_evaluate` to clear localStorage
+   - Use `browser_navigate` to reload the page
+   - Wait for the welcome dialog to appear (use `browser_wait_for` if needed)
+   - **DO NOT SKIP THIS STEP** - the tutorial will not appear if localStorage contains onboarding completion data
+
+2. **Follow the entire tutorial** – step through from welcome to completion:
+   - After **every** action (click, type, submit), capture a `browser_snapshot`
+   - After **every** modal transition, capture a `browser_snapshot`
+   - After **every** tour step advance, capture a `browser_snapshot`
+   - **DO NOT PROCEED** to the next action until you have verified the current snapshot
+
+3. **Checklist per step** (verify in each snapshot):
+   - ✅ Only the intended modal/overlay is present (not multiple modals overlapping)
+   - ✅ CTA required by the tutorial is unobstructed (Shepherd dialog doesn't block buttons)
+   - ✅ All form fields are visible and accessible (not hidden off-screen)
+   - ✅ Inline errors/success toasts display near the related element without covering other actions
+   - ✅ Keyboard navigation/focus order still works
+   - ✅ No console errors (check `browser_console_messages` after each step)
+   - ✅ If feedback appears as auto-dismiss toasts, capture a snapshot while they are visible or record the console log that confirms they rendered; don't assume success if you didn't observe it
+
+4. **Log deviations immediately** – if ANY checklist item fails:
+   - **STOP** the walkthrough immediately
+   - Document the issue clearly
+   - Fix the root cause (layout/z-index/state/modal management)
+   - **RESTART from step 1** (clear localStorage again)
+   - Do not proceed with the tutorial until the current step passes all checklist items
+
+These rules apply to all UX-related work unless explicitly overridden. Document new edge-case rules here whenever we uncover additional constraints.
