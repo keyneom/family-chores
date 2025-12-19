@@ -25,7 +25,7 @@ export function shouldTaskRunToday(task: Task, date?: string): boolean {
       const firstOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
       const taskIdHash2 = parseInt(task.id.replace(/\D/g, '')) || 0;
       const targetDay = (taskIdHash2 % 7);
-      let firstTargetDay = new Date(firstOfMonth);
+      const firstTargetDay = new Date(firstOfMonth);
       firstTargetDay.setDate(firstTargetDay.getDate() + (targetDay - firstTargetDay.getDay() + 7) % 7);
       return targetDate.getDate() === firstTargetDay.getDate();
     case 'weekdays':

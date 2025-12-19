@@ -4,9 +4,8 @@ import { useChoresApp, Child } from "./ChoresAppContext";
 import { Task, TaskInstance } from "../types/task";
 import type { TimedCompletion } from "../types/task";
 import { useModalControl } from "./ModalControlContext";
-import { getInstancesForChildAndDate, getTemplateForInstance, generateInstancesForDate } from "../utils/taskInstanceGeneration";
-import { getNextExecutionDateTimes } from "../utils/recurrenceBuilder";
-import { assignTaskToChild } from "../utils/taskAssignment";
+import { getTemplateForInstance, computeDueAt } from "../utils/taskInstanceGeneration";
+import { getTheoreticalAssignment } from "../utils/projectionUtils";
 import { getTodayString, getLocalDateString } from "../utils/dateUtils";
 import AlertModal from "./modals/AlertModal";
 import ConfirmationModal from "./modals/ConfirmationModal";
@@ -15,6 +14,7 @@ import ActionLogModal from "./modals/ActionLogModal";
 import PinModal from "./modals/PinModal";
 import DragDropConfirmModal, { DragDropOption } from "./modals/DragDropConfirmModal";
 import DeleteTaskModal, { DeleteOption } from "./modals/DeleteTaskModal";
+import useScheduledTaskAnnouncements from "./hooks/useScheduledTaskAnnouncements";
 
 
 interface ChildColumnProps {
@@ -24,7 +24,7 @@ interface ChildColumnProps {
 
 export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   const { state, dispatch } = useChoresApp();
-  const { openEditChildModal, openTaskEditModal } = useModalControl();
+  const { openEditChildModal } = useModalControl();
   const [payOpen, setPayOpen] = React.useState(false);
   const [logOpen, setLogOpen] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
@@ -104,39 +104,34 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
 
   const handleMoveInstance = (task: Task, instanceDate: string) => {
     // Find the instance for this date - ensure we only find instances for THIS specific task
-    const instance = (state.taskInstances || []).find(
-      inst => inst.templateId === task.id && inst.date === instanceDate.split('T')[0]
+    const dateStr = instanceDate.split('T')[0];
+    const existingInstance = (state.taskInstances || []).find(
+      inst => inst.templateId === task.id && inst.date === dateStr
     );
     
-    if (instance) {
+    if (existingInstance) {
       // Update ONLY this specific instance's childId
       dispatch({
         type: 'UPDATE_TASK_INSTANCE',
         payload: {
-          ...instance,
+          ...existingInstance,
           childId: child.id,
         },
       });
     } else {
-      // If instance doesn't exist yet, we need to create it
-      // This shouldn't normally happen, but handle it gracefully
-      const dateStr = instanceDate.split('T')[0];
-      const { instances } = generateInstancesForDate(
-        [task], // Only generate for this specific task
-        state.children,
-        dateStr,
-        state.taskInstances || []
-      );
+      // Instance doesn't exist (it was theoretical). Realize it now with the NEW child assignment.
+      const newInstance: TaskInstance = {
+        id: `realized_${task.id}_${child.id}_${dateStr}_${Date.now()}`,
+        templateId: task.id,
+        childId: child.id, // Assign to the NEW child immediately
+        date: dateStr,
+        completed: false,
+        createdAt: new Date().toISOString(),
+        stars: task.stars,
+        money: task.money
+      };
       
-      const newInstance = instances.find(
-        inst => inst.templateId === task.id && inst.date === dateStr
-      );
-      
-      if (newInstance) {
-        // Update the childId before adding - ensure we only add this one instance
-        const updatedInstance = { ...newInstance, childId: child.id };
-        dispatch({ type: 'ADD_TASK_INSTANCE', payload: updatedInstance });
-      }
+      dispatch({ type: 'ADD_TASK_INSTANCE', payload: newInstance });
     }
   };
 
@@ -173,10 +168,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       },
     });
     
-    // Regenerate instances for today and future dates
-    // This will be handled by ChildrenGrid's instance generation logic
-    // NOTE: ChildrenGrid should only regenerate instances for tasks that changed,
-    // not all tasks. The UPDATE_TASK reducer should only update the specific task.
+    // No need to regenerate instances - the projection engine will pick up the new start date automatically
   };
 
   const handleDragDropConfirm = (option: DragDropOption) => {
@@ -211,16 +203,72 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   
   const today = getTodayString();
   
-  // Note: Instance generation is now handled in ChildrenGrid to prevent duplicates
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // --- Task Projection Logic ---
   
-  // Get instances for this child today
-  const todayInstances = getInstancesForChildAndDate(
-    state.taskInstances || [],
-    child.id,
-    today
+  // 1. Get Realized (DB) instances for today
+  const dbInstancesToday = (state.taskInstances || []).filter(
+    inst => inst.childId === child.id && inst.date === today
   );
+
+  // 2. Calculate Theoretical assignments for today
+  // Filter out any that already have a Realized instance (completed or moved)
+  // Note: A realized instance might be on THIS child (handled above) or ANOTHER child (must be excluded here)
+  const theoreticalTasksToday = useMemo(() => {
+    if (!mounted) return [];
+    
+    const projected: TaskWithInstance[] = [];
+    
+    state.tasks.forEach(task => {
+        if (!task.enabled) return;
+        // Check if a realized instance exists for this task on this date (ANY child)
+        const existingInstance = (state.taskInstances || []).find(
+            inst => inst.templateId === task.id && inst.date === today
+        );
+        
+        // If realized instance exists, the "wave has collapsed" - do not project
+        if (existingInstance) return;
+
+        // Calculate projection
+        // We pass ALL tasks because Linked Tasks need to look up their parents
+        const assignments = getTheoreticalAssignment(task, today, state.tasks);
+        
+        // Is this child assigned?
+        const myAssignment = assignments.find(a => a.childId === child.id);
+        
+        if (myAssignment) {
+            const dueAt = computeDueAt(task, today);
+            const instance: TaskInstance = {
+                id: `projected_${task.id}_${child.id}_${today}`,
+                templateId: task.id,
+                childId: child.id,
+                date: today,
+                dueAt,
+                completed: false,
+                createdAt: new Date().toISOString(),
+                stars: task.stars,
+                money: task.money,
+                rotationIndex: myAssignment.rotationIndex
+            };
+            
+            projected.push({
+                ...task,
+                instance,
+                taskKey: `${child.id}-${task.id}-${today}`,
+                isCompleted: false
+            });
+        }
+    });
+    
+    return projected;
+  }, [state.tasks, state.taskInstances, today, child.id, mounted]);
+
   
-  // Build renderable tasks from instances
+  // Build renderable tasks from Realized instances
   interface TaskWithInstance extends Task {
     instance: TaskInstance;
     taskKey: string;
@@ -229,51 +277,62 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     pendingCompletion?: TimedCompletion;
   }
   
+  const realizedTasksToday = useMemo(() => {
+      const results: TaskWithInstance[] = [];
+      dbInstancesToday.forEach((instance) => {
+        const template = getTemplateForInstance(instance, state.tasks);
+        if (!template) return; // Skip if template not found
+        
+        // Build taskKey for backward compatibility with timers/completions
+        const taskKey = `${instance.childId}-${instance.templateId}-${instance.date}`;
+        const isCompleted = instance.completed;
+        const pending = (state.timedCompletions || []).find(
+          (c) => c.taskKey === taskKey && c.childId === instance.childId && !c.approved
+        );
+        
+        results.push({
+          ...template,
+          instance,
+          taskKey,
+          isCompleted,
+          pendingCompletionId: pending?.id,
+          pendingCompletion: pending,
+        });
+      });
+      return results;
+  }, [dbInstancesToday, state.tasks, state.timedCompletions]);
+
+  // Merge Realized + Projected
+  // Realized takes precedence (already filtered out of projected if exists)
+  const allTasksToday = useMemo(() => {
+    return [...realizedTasksToday, ...theoreticalTasksToday];
+  }, [realizedTasksToday, theoreticalTasksToday]);
+  
   const activeTasks: TaskWithInstance[] = [];
   const inactiveTasks: TaskWithInstance[] = [];
 
-  todayInstances.forEach((instance) => {
-    const template = getTemplateForInstance(instance, state.tasks);
-    if (!template) return; // Skip if template not found
-    
-    // Build taskKey for backward compatibility with timers/completions
-    const taskKey = `${instance.childId}-${instance.templateId}-${instance.date}`;
-    const isCompleted = instance.completed;
-    const pending = (state.timedCompletions || []).find(
-      (c) => c.taskKey === taskKey && c.childId === instance.childId && !c.approved
-    );
-    
-    const taskWithInstance: TaskWithInstance = {
-      ...template,
-      instance,
-      taskKey,
-      isCompleted,
-      pendingCompletionId: pending?.id,
-      pendingCompletion: pending,
-    };
-    
+  allTasksToday.forEach(task => {
     // Categorize by type
-    if (template.type === 'oneoff' || template.oneOff) {
+    if (task.type === 'oneoff' || task.oneOff) {
       // One-off tasks: active if due today, inactive otherwise
-      const dueDate = template.oneOff?.dueDate;
+      const dueDate = task.oneOff?.dueDate;
       if (dueDate && dueDate.split('T')[0] === today) {
-        activeTasks.push(taskWithInstance);
+        activeTasks.push(task);
       } else {
-        inactiveTasks.push(taskWithInstance);
+        inactiveTasks.push(task);
       }
     } else {
       // Recurring/timed tasks: active for today
-      activeTasks.push(taskWithInstance);
+      activeTasks.push(task);
     }
   });
 
-  // Get upcoming scheduled tasks for this child
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const completedToday = activeTasks.filter(task => task.isCompleted);
+  const pendingToday = activeTasks.filter(task => !task.isCompleted);
 
+  // --- Upcoming Tasks (Projected) ---
   const [showAllUpcoming, setShowAllUpcoming] = useState(false);
+  const [showCompletedToday, setShowCompletedToday] = useState(false);
   
   const upcomingScheduledTasks = useMemo(() => {
     if (!mounted) return [];
@@ -282,81 +341,167 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     // Calculate 7 days from today
     const sevenDaysFromNow = new Date(today);
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-    const sevenDaysFromNowStr = getLocalDateString(sevenDaysFromNow);
     
-    state.tasks.forEach((task) => {
-      if (!task.enabled || !task.schedule) return;
-      
-      // Check if this task is assigned to this child
-      const assignedChildIds = task.assignedChildIds || [];
-      if (assignedChildIds.length === 0) return;
-      
-      // Get next occurrences (get more than we need to filter properly)
-      const occurrences = getNextExecutionDateTimes(task.schedule, today, 20);
-      
-      occurrences.forEach((dateTime) => {
-        const dateOnly = dateTime.split('T')[0];
-        // Skip today (already shown in Today's Tasks)
-        if (dateOnly === today) return;
+    // Iterate dates from tomorrow to 7 days out
+    const cursor = new Date(today);
+    cursor.setDate(cursor.getDate() + 1); // Start tomorrow
+    
+    while (cursor <= sevenDaysFromNow) {
+        const dateStr = getLocalDateString(cursor);
         
-        // Only show tasks within the next 7 days
-        if (dateOnly > sevenDaysFromNowStr) return;
-        
-        // Check assignment for this date - CRITICAL: only show if assigned to THIS child
-        const assignments = assignTaskToChild(task, state.children, { date: dateOnly });
-        const assignedToThisChild = assignments.some(plan => plan.child.id === child.id);
-        
-        if (assignedToThisChild) {
-          upcoming.push({ task, dateTime, date: dateOnly });
+        // Skip today - those tasks are shown in "Today's Tasks" section
+        if (dateStr === today) {
+          cursor.setDate(cursor.getDate() + 1);
+          continue;
         }
-      });
-    });
+        
+        state.tasks.forEach(task => {
+            if (!task.enabled) return;
+            
+            // Check for REALIZED instance first (e.g. rescheduled to future)
+            const existingInstance = (state.taskInstances || []).find(
+                inst => inst.templateId === task.id && inst.date === dateStr
+            );
+            
+            if (existingInstance) {
+                // If it exists and assigned to THIS child, show it
+                if (existingInstance.childId === child.id) {
+                    upcoming.push({ 
+                        task, 
+                        dateTime: `${dateStr}T${task.schedule?.dueTime || "00:00"}`, 
+                        date: dateStr 
+                    });
+                }
+                // If exists but assigned to another child, skip
+                return;
+            }
+            
+            // No realized instance -> Project it
+            const assignments = getTheoreticalAssignment(task, dateStr, state.tasks);
+            const myAssignment = assignments.find(a => a.childId === child.id);
+            
+            if (myAssignment) {
+                upcoming.push({ 
+                    task, 
+                    dateTime: `${dateStr}T${task.schedule?.dueTime || "00:00"}`, 
+                    date: dateStr 
+                });
+            }
+        });
+        
+        cursor.setDate(cursor.getDate() + 1);
+    }
     
     // Sort by date
-    const sorted = upcoming.sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const sorted = upcoming.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     
     // Limit to 5 initially, or show all if "see more" is clicked
     return showAllUpcoming ? sorted : sorted.slice(0, 5);
-  }, [state.tasks, state.children, child.id, today, mounted, showAllUpcoming]);
+  }, [state.tasks, state.taskInstances, child.id, today, mounted, showAllUpcoming]);
   
-  const hasMoreUpcoming = useMemo(() => {
-    if (!mounted) return false;
+  // Calculate total count for "See more" button
+  const totalUpcomingCount = useMemo(() => {
+    if (!mounted) return 0;
+    let count = 0;
     const sevenDaysFromNow = new Date(today);
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-    const sevenDaysFromNowStr = getLocalDateString(sevenDaysFromNow);
     
-    let count = 0;
-    state.tasks.forEach((task) => {
-      if (!task.enabled || !task.schedule) return;
-      const assignedChildIds = task.assignedChildIds || [];
-      if (assignedChildIds.length === 0) return;
+    const cursor = new Date(today);
+    cursor.setDate(cursor.getDate() + 1);
+    
+    while (cursor <= sevenDaysFromNow) {
+      const dateStr = getLocalDateString(cursor);
       
-      const occurrences = getNextExecutionDateTimes(task.schedule, today, 20);
-      occurrences.forEach((dateTime) => {
-        const dateOnly = dateTime.split('T')[0];
-        if (dateOnly === today || dateOnly > sevenDaysFromNowStr) return;
-        const assignments = assignTaskToChild(task, state.children, { date: dateOnly });
-        if (assignments.some(plan => plan.child.id === child.id)) {
-          count++;
+      // Skip today - those tasks are shown in "Today's Tasks" section
+      if (dateStr === today) {
+        cursor.setDate(cursor.getDate() + 1);
+        continue;
+      }
+      
+      state.tasks.forEach(task => {
+        if (!task.enabled) return;
+        const existingInstance = (state.taskInstances || []).find(
+          inst => inst.templateId === task.id && inst.date === dateStr
+        );
+        
+        if (existingInstance) {
+          if (existingInstance.childId === child.id) count++;
+        } else {
+          const assignments = getTheoreticalAssignment(task, dateStr, state.tasks);
+          if (assignments.some(a => a.childId === child.id)) count++;
         }
       });
-    });
-    return count > 5;
-  }, [state.tasks, state.children, child.id, today, mounted]);
-
-  const formatDateTime = (dateTime: string): string => {
-    const date = new Date(dateTime);
-    if (Number.isNaN(date.getTime())) return dateTime;
-    if (typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function") {
-      return Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+      
+      cursor.setDate(cursor.getDate() + 1);
     }
-    return date.toISOString();
-  };
+    
+    return count;
+  }, [state.tasks, state.taskInstances, child.id, today, mounted]);
+  
+  const hasMoreUpcoming = totalUpcomingCount > 5;
+
+
+  // Prepare scheduled tasks for announcements (Unified Logic)
+  const scheduledTasksForAnnouncements = useMemo(() => {
+    if (!mounted) return [];
+    const tasks: Array<{ task: Task; instance: TaskInstance; child: Child }> = [];
+    
+    // Include today's tasks
+    allTasksToday.forEach((t) => {
+      if (!t.instance.dueAt && !t.schedule?.dueTime) return;
+      tasks.push({ task: t, instance: t.instance, child });
+    });
+    
+    // Include upcoming
+    upcomingScheduledTasks.forEach(({ task, dateTime, date }) => {
+        // Construct a theoretical instance for announcement purposes
+        const instance: TaskInstance = {
+            id: `scheduled_${task.id}_${child.id}_${date}`,
+            templateId: task.id,
+            childId: child.id,
+            date,
+            dueAt: dateTime,
+            stars: task.stars,
+            money: task.money,
+            completed: false,
+            createdAt: new Date().toISOString(),
+        };
+        tasks.push({ task, instance, child });
+    });
+    
+    return tasks;
+  }, [allTasksToday, upcomingScheduledTasks, child, mounted]);
+  
+  // Voice announcements for scheduled tasks
+  // Filter to only tasks that have voiceAnnouncements enabled
+  const voiceSettings = state.parentSettings.voiceAnnouncements;
+  const scheduledTasksWithVoice = useMemo(() => {
+    return scheduledTasksForAnnouncements.filter(({ task }) => {
+      // Only include tasks where voiceAnnouncements is not explicitly false
+      return task.voiceAnnouncements !== false;
+    });
+  }, [scheduledTasksForAnnouncements]);
+  
+  useScheduledTaskAnnouncements(
+    scheduledTasksWithVoice,
+    voiceSettings?.scheduledAnnouncements?.enabled ? {
+      enabled: voiceSettings.enabled && (voiceSettings.scheduledAnnouncements?.enabled ?? false),
+      volume: voiceSettings.volume ?? 1,
+      rate: voiceSettings.rate ?? 1,
+      pitch: voiceSettings.pitch ?? 1,
+      announceMinutesBefore: voiceSettings.scheduledAnnouncements?.announceMinutesBefore,
+      announceAtDueTime: voiceSettings.scheduledAnnouncements?.announceAtDueTime,
+      messageFormat: voiceSettings.scheduledAnnouncements?.messageFormat,
+    } : { enabled: false }
+  );
+
 
   const performEarlyCompletion = (task: Task, date: string) => {
+    const dateStr = date.split('T')[0];
+    
     // Check if instance already exists
     const existingInstance = (state.taskInstances || []).find(
-      inst => inst.templateId === task.id && inst.childId === child.id && inst.date === date
+      inst => inst.templateId === task.id && inst.childId === child.id && inst.date === dateStr
     );
     
     if (existingInstance) {
@@ -373,60 +518,34 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         });
       }
     } else {
-      // Generate instance for this date and complete it
-      const { instances } = generateInstancesForDate(
-        [task],
-        state.children,
-        date,
-        state.taskInstances || []
-      );
+      // Realize the theoretical instance
+      const newInstance: TaskInstance = {
+        id: `realized_${task.id}_${child.id}_${dateStr}_${Date.now()}`,
+        templateId: task.id,
+        childId: child.id,
+        date: dateStr,
+        completed: false,
+        createdAt: new Date().toISOString(),
+        stars: task.stars,
+        money: task.money
+      };
       
-      const newInstance = instances.find(
-        inst => inst.templateId === task.id && inst.childId === child.id && inst.date === date
-      );
-      
-      if (newInstance) {
-        // Add the instance first
-        dispatch({ type: 'ADD_TASK_INSTANCE', payload: newInstance });
-        // Then complete it
-        dispatch({
-          type: 'COMPLETE_TASK_INSTANCE',
-          payload: {
-            instanceId: newInstance.id,
-            childId: child.id,
-            starReward: Number(newInstance.stars ?? task.stars ?? 0),
-            moneyReward: Number(newInstance.money ?? task.money ?? 0),
-          },
-        });
-      }
+      // Add AND Complete
+      dispatch({ type: 'ADD_TASK_INSTANCE', payload: newInstance });
+      dispatch({
+        type: 'COMPLETE_TASK_INSTANCE',
+        payload: {
+          instanceId: newInstance.id,
+          childId: child.id,
+          starReward: Number(task.stars ?? 0),
+          moneyReward: Number(task.money ?? 0),
+        },
+      });
     }
   };
 
-  const handleCompleteUpcomingTask = (task: Task, date: string) => {
-    // Check if approval is required for early completion
-    // Use explicit boolean check to ensure we catch true values
-    const requiresApproval = !!(state.parentSettings?.approvals?.earlyComplete);
-    const approvers = state.parentSettings?.pins || [];
-    
-    if (requiresApproval) {
-      // Check if there are any approvers defined
-      if (approvers.length === 0) {
-        // Show alert if no approvers are defined
-        setEarlyCompleteAlertOpen(true);
-        return;
-      }
-      
-      // Store pending completion and open PIN modal
-      setPendingEarlyCompletion({ task, date });
-      setPinOpen(true);
-      return;
-    }
-    
-    // No approval required, complete directly
-    performEarlyCompletion(task, date);
-  };
 
-  const handlePinSuccess = (actorHandle?: string) => {
+  const handlePinSuccess = () => {
     setPinOpen(false);
     if (pendingEarlyCompletion) {
       performEarlyCompletion(pendingEarlyCompletion.task, pendingEarlyCompletion.date);
@@ -511,14 +630,27 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
               + Task
             </button>
           </div>
-          {activeTasks.length === 0 ? (
+          {pendingToday.length === 0 && completedToday.length === 0 ? (
             <div className="empty-state">No tasks for today</div>
           ) : (
             <>
-              {activeTasks.map((task) => {
-                const key = task.instance.id;
+              {pendingToday.map((task) => {
+                // Determine key based on whether it's realized or projected
+                // Use a prefix to ensure uniqueness and avoid key collisions during transitions
+                const key = `${task.instance.id.startsWith('projected') ? 'p' : 'r'}-${task.instance.id}`;
                 return (<TaskItem key={key} task={task} instance={task.instance} childId={child.id} />);
               })}
+              {completedToday.length > 0 && (
+                <div className="completed-tasks">
+                  <button className="see-more-btn" onClick={() => setShowCompletedToday(!showCompletedToday)}>
+                    {showCompletedToday ? 'Hide completed' : `Show completed (${completedToday.length})`}
+                  </button>
+                  {showCompletedToday && completedToday.map((task) => {
+                    const key = `completed-${task.instance.id}`;
+                    return (<TaskItem key={key} task={task} instance={task.instance} childId={child.id} />);
+                  })}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -527,7 +659,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
             <div className="section-title">Upcoming Tasks</div>
             <>
               {inactiveTasks.map((task) => {
-                const key = task.instance.id;
+                const key = `inactive-${task.instance.id}`;
                 return (<TaskItem key={key} task={task} instance={task.instance} childId={child.id} />);
               })}
             </>
@@ -538,25 +670,39 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
             <div className="section-title">Scheduled</div>
             <>
               {upcomingScheduledTasks.map(({ task, dateTime, date }) => {
-                // Check if instance already exists for this date
+                // For upcoming, we rely on the projection or existing instance passed in useMemo
+                // We need to fetch the instance again or construct it to ensure TaskItem props are correct.
+                
+                // Re-check for realized instance
                 const existingInstance = (state.taskInstances || []).find(
                   inst => inst.templateId === task.id && inst.childId === child.id && inst.date === date
                 );
                 
-                // Create a task-like object for TaskItem component
-                const taskWithInstance: Task & { instance?: TaskInstance; taskKey: string; isCompleted: boolean } = {
+                const derivedInstance: TaskInstance = existingInstance || {
+                  id: `scheduled_${task.id}_${child.id}_${date}`,
+                  templateId: task.id,
+                  childId: child.id,
+                  date,
+                  dueAt: dateTime,
+                  stars: task.stars,
+                  money: task.money,
+                  completed: false,
+                  createdAt: new Date().toISOString(),
+                };
+
+                const taskWithInstance: Task & { instance: TaskInstance; taskKey: string; isCompleted: boolean } = {
                   ...task,
-                  instance: existingInstance,
-                  taskKey: existingInstance ? `${existingInstance.childId}-${existingInstance.templateId}-${existingInstance.date}` : `${child.id}-${task.id}-${date}`,
-                  isCompleted: existingInstance?.completed || false,
+                  instance: derivedInstance,
+                  taskKey: `${derivedInstance.childId}-${derivedInstance.templateId}-${derivedInstance.date}`,
+                  isCompleted: derivedInstance.completed || false,
                 };
                 
-                const key = existingInstance?.id || `${task.id}-${dateTime}`;
+                const key = derivedInstance.id || `${task.id}-${dateTime}`;
                 return (
                   <TaskItem 
                     key={key} 
                     task={taskWithInstance} 
-                    instance={existingInstance} 
+                    instance={derivedInstance} 
                     childId={child.id} 
                   />
                 );
@@ -567,7 +713,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
                 className="see-more-btn"
                 onClick={() => setShowAllUpcoming(true)}
               >
-                See more ({upcomingScheduledTasks.length} shown)
+                See more ({totalUpcomingCount} total)
               </button>
             )}
             {showAllUpcoming && hasMoreUpcoming && (

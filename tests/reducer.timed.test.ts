@@ -154,13 +154,13 @@ describe('Timed Task Reducer', () => {
 
     it('should handle large-late completion causing negative money', () => {
       const initialState = createInitialState();
-      // Update task with negative penalty
+      // Update task with penalty > 100% (creates negative payout when late)
       initialState.tasks[0] = {
         ...initialState.tasks[0],
         money: 20.0,
         timed: {
           ...initialState.tasks[0].timed!,
-          latePenaltyPercent: -0.5, // Negative penalty (debt)
+          latePenaltyPercent: 1.5, // 150% penalty -> rewardPercentage = -0.5
         },
       };
 

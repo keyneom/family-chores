@@ -741,8 +741,9 @@ header h1 {
 .child-header-actions {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
+  min-width: 0; /* Allow flex items to shrink below their content size */
 }
 
 .btn-icon-text {
@@ -758,6 +759,8 @@ header h1 {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  flex-shrink: 1; /* Allow buttons to shrink */
+  min-width: 0; /* Allow flex items to shrink below their content size */
 }
 
 .btn-icon-text:hover {
@@ -773,6 +776,9 @@ header h1 {
 .btn-icon-text .btn-text {
   font-weight: 500;
   font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0; /* Allow text to shrink */
 }
 
 .child-stats {

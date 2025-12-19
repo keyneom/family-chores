@@ -82,6 +82,7 @@ export interface RotationSettings {
   allowSimultaneous?: boolean;
   groupId?: string;
   linkedTaskId?: string; // ID of another task to link rotations with
+  linkedTaskOffset?: number; // integer offset when following another task's rotation
 }
 
 export interface TaskBase {
@@ -167,6 +168,10 @@ export interface Task extends TaskBase {
   // Legacy compatibility fields
   emoji?: string;
   color?: string;
+  // Per-task voice announcement settings
+  // If true, this task will use voice announcements (respects global settings)
+  // If false or undefined, this task will not announce (even if global is enabled)
+  voiceAnnouncements?: boolean;
 }
 
 // Task Instance - represents an actual occurrence of a task that can be completed

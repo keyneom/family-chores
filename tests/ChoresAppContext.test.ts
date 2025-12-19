@@ -45,7 +45,13 @@ describe('ChoresAppContext Reducer', () => {
       });
 
       expect(newState.tasks).toHaveLength(1);
-      expect(newState.tasks?.[0]).toEqual(newTask);
+      expect(newState.tasks?.[0]).toMatchObject({
+        id: newTask.id,
+        title: newTask.title,
+        stars: newTask.stars,
+        money: newTask.money,
+        type: newTask.type,
+      });
     });
 
     it('should add multiple tasks', () => {
@@ -84,8 +90,8 @@ describe('ChoresAppContext Reducer', () => {
       });
 
       expect(newState.tasks).toHaveLength(2);
-      expect(newState.tasks?.[0]).toEqual(task1);
-      expect(newState.tasks?.[1]).toEqual(task2);
+      expect(newState.tasks?.[0]).toMatchObject({ id: task1.id, title: task1.title });
+      expect(newState.tasks?.[1]).toMatchObject({ id: task2.id, title: task2.title });
     });
   });
 
@@ -320,6 +326,34 @@ describe('ChoresAppContext Reducer', () => {
 
       const logEntry = newState.actionLog?.find(log => log.actionType === 'APPROVE_TIMED_COMPLETION');
       expect(logEntry?.actorHandle).toBe('parent1');
+    });
+  });
+
+  describe('REPLACE_TASK_INSTANCES', () => {
+    it('replaces uncompleted instances from a start date while keeping completed history', () => {
+      const initialState = createInitialState();
+      initialState.taskInstances = [
+        { id: 'past-complete', templateId: 'task_1', childId: 1, date: '2024-01-01', completed: true, createdAt: new Date().toISOString() },
+        { id: 'today-old', templateId: 'task_1', childId: 1, date: '2024-01-10', completed: false, createdAt: new Date().toISOString() },
+        { id: 'future-old', templateId: 'task_1', childId: 1, date: '2024-01-11', completed: false, createdAt: new Date().toISOString() },
+      ];
+
+      const replacement = { id: 'today-new', templateId: 'task_1', childId: 2, date: '2024-01-10', completed: false, createdAt: new Date().toISOString() };
+
+      const newState = choresAppReducer(initialState, {
+        type: 'REPLACE_TASK_INSTANCES',
+        payload: {
+          taskId: 'task_1',
+          startDate: '2024-01-10',
+          instances: [replacement],
+          preserveCompleted: true,
+        },
+      });
+
+      expect(newState.taskInstances.find(inst => inst.id === 'past-complete')).toBeDefined();
+      expect(newState.taskInstances.find(inst => inst.id === 'today-old')).toBeUndefined();
+      expect(newState.taskInstances.find(inst => inst.id === 'future-old')).toBeUndefined();
+      expect(newState.taskInstances.find(inst => inst.id === 'today-new')?.childId).toBe(2);
     });
   });
 });

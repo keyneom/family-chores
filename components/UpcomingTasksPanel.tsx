@@ -29,7 +29,7 @@ function childNamesForAssignment(assignments: Child[]): string[] {
   return assignments.map((child) => child.name);
 }
 
-function getUpcomingForTask(task: Task, children: Child[], today: string, perTask: number): UpcomingEntry[] {
+function getUpcomingForTask(task: Task, children: Child[], allTasks: Task[], today: string, perTask: number): UpcomingEntry[] {
   if (!task.enabled) return [];
 
   // One-off tasks: show the due date if in the future
@@ -38,7 +38,7 @@ function getUpcomingForTask(task: Task, children: Child[], today: string, perTas
     if (new Date(dueDate) < new Date()) {
       return [];
     }
-    const assignments = assignTaskToChild(task, children, { date: dueDate.split("T")[0] });
+    const assignments = assignTaskToChild(task, children, { date: dueDate.split("T")[0] }, allTasks);
     if (!assignments || assignments.length === 0) return [];
     return [
       {
@@ -57,7 +57,7 @@ function getUpcomingForTask(task: Task, children: Child[], today: string, perTas
 
   occurrences.forEach((dateTime) => {
     const dateOnly = dateTime.split("T")[0];
-    const assignments = assignTaskToChild(task, children, { date: dateOnly });
+    const assignments = assignTaskToChild(task, children, { date: dateOnly }, allTasks);
     if (!assignments || assignments.length === 0) return;
     entries.push({
       taskId: task.id,
@@ -87,7 +87,7 @@ const UpcomingTasksPanel: React.FC<UpcomingTasksPanelProps> = ({
     if (!mounted) return [];
     const entries: UpcomingEntry[] = [];
     state.tasks.forEach((task) => {
-      const taskEntries = getUpcomingForTask(task, state.children, today, occurrencesPerTask);
+      const taskEntries = getUpcomingForTask(task, state.children, state.tasks, today, occurrencesPerTask);
       entries.push(...taskEntries);
     });
 

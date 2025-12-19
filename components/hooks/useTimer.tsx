@@ -35,17 +35,9 @@ export function useTimer(taskKey?: string, childId?: number): UseTimerReturn {
   const start = useCallback(() => {
     if (!taskKey || typeof childId === 'undefined' || childId === null) return;
     
-    // If timer already exists, use its allowed time
+    // If timer already exists, don't create a duplicate - just return
+    // The existing timer should continue running
     if (activeTimer) {
-      const timerId = `t_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-      const timer = {
-        id: timerId,
-        taskKey,
-        childId,
-        startedAt: new Date().toISOString(),
-        allowedSeconds: activeTimer.allowedSeconds,
-      };
-      dispatch({ type: 'START_TIMER', payload: { timer } });
       return;
     }
     
@@ -91,7 +83,7 @@ export function useTimer(taskKey?: string, childId?: number): UseTimerReturn {
   const canStopNow = useMemo(() => {
     if (!activeTimer) return false;
     const started = new Date(activeTimer.startedAt).getTime();
-    return (Date.now() - started) >= 60000;
+    return (Date.now() - started) >= 5000; // Allow stopping after 5 seconds (reduced from 60)
   }, [activeTimer]);
 
   return { activeTimer, start, stop, canStopNow };

@@ -22,7 +22,7 @@ describe('taskAssignment', () => {
       },
     };
 
-    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' });
+    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
     expect(assignments).toHaveLength(1);
     expect(assignments[0].child.id).toBe(1);
   });
@@ -40,7 +40,7 @@ describe('taskAssignment', () => {
       },
     };
 
-    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' });
+    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
     expect(assignments).toHaveLength(3);
     expect(assignments.map(a => a.child.id).sort()).toEqual([1, 2, 3]);
   });
@@ -58,9 +58,9 @@ describe('taskAssignment', () => {
       },
     };
 
-    const day1 = assignTaskToChild(task, children, { date: '2024-01-01' });
-    const day2 = assignTaskToChild(task, children, { date: '2024-01-02' });
-    const day3 = assignTaskToChild(task, children, { date: '2024-01-03' });
+    const day1 = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
+    const day2 = assignTaskToChild(task, children, { date: '2024-01-02' }, [task]);
+    const day3 = assignTaskToChild(task, children, { date: '2024-01-03' }, [task]);
 
     expect(day1).toHaveLength(1);
     expect(day2).toHaveLength(1);
@@ -87,7 +87,7 @@ describe('taskAssignment', () => {
       },
     };
 
-    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' });
+    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
     expect(assignments).toHaveLength(0);
   });
 
@@ -99,8 +99,43 @@ describe('taskAssignment', () => {
       type: 'recurring',
     };
 
-    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' });
+    const assignments = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
     expect(assignments.length).toBeGreaterThan(0);
+  });
+
+  it('supports linked rotation offsets without cycles', () => {
+    const sourceTask: Task = {
+      id: 'task_source',
+      title: 'Source',
+      createdAt: new Date().toISOString(),
+      type: 'recurring',
+      rotation: {
+        mode: 'round-robin',
+        assignedChildIds: [1, 2, 3],
+        rotationOrder: [1, 2, 3],
+        startDate: '2024-01-01',
+      },
+    };
+
+    const offsetTask: Task = {
+      id: 'task_offset',
+      title: 'Offset follower',
+      createdAt: new Date().toISOString(),
+      type: 'recurring',
+      rotation: {
+        mode: 'round-robin',
+        assignedChildIds: [1, 2, 3],
+        linkedTaskId: 'task_source',
+        linkedTaskOffset: 1,
+        startDate: '2024-01-01',
+      },
+    };
+
+    const day1 = assignTaskToChild(offsetTask, children, { date: '2024-01-01' }, [sourceTask, offsetTask]);
+    const day2 = assignTaskToChild(offsetTask, children, { date: '2024-01-02' }, [sourceTask, offsetTask]);
+
+    expect(day1[0].child.id).toBe(2); // source day1 child 1, offset +1 => child 2
+    expect(day2[0].child.id).toBe(3); // source day2 child 2, offset +1 => child 3
   });
 });
 

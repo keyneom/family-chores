@@ -1,10 +1,6 @@
-import React, { useEffect } from "react";
+import React from "react";
 import ChildColumn from "./ChildColumn";
 import { Child, useChoresApp } from "./ChoresAppContext";
-import { generateInstancesForDate } from "../utils/taskInstanceGeneration";
-import { getTodayString } from "../utils/dateUtils";
-
-
 
 interface ChildrenGridProps {
   childrenList: Child[];
@@ -16,51 +12,9 @@ export default function ChildrenGrid({ childrenList, onAddTask }: ChildrenGridPr
   const gridRef = React.useRef<HTMLDivElement>(null);
   const [draggedChildId, setDraggedChildId] = React.useState<number | null>(null);
   
-  // Auto-generate instances for today if they don't exist (run once, not per child)
-  const today = getTodayString();
-  useEffect(() => {
-    const { instances: newInstances, rotationStates } = generateInstancesForDate(
-      state.tasks,
-      state.children,
-      today,
-      state.taskInstances || []
-    );
-    
-    if (newInstances.length > 0) {
-      newInstances.forEach(instance => {
-        dispatch({ type: 'ADD_TASK_INSTANCE', payload: instance });
-      });
-    }
-
-    if (rotationStates.length > 0) {
-      rotationStates.forEach(({ taskId, rotation, assignment }) => {
-        const template = state.tasks.find(task => task.id === taskId);
-        if (!template) return;
-        const prevRotation = template.rotation;
-        const prevAssignment = template.assignment;
-        const rotationChanged =
-          !prevRotation ||
-          prevRotation.lastRotationIndex !== rotation.lastRotationIndex ||
-          prevRotation.lastAssignedChildId !== rotation.lastAssignedChildId;
-        const assignmentChanged =
-          assignment &&
-          (!prevAssignment ||
-            prevAssignment.history?.lastRotationIndex !== assignment.history?.lastRotationIndex ||
-            prevAssignment.history?.lastAssignedChildId !== assignment.history?.lastAssignedChildId);
-        if (rotationChanged || assignmentChanged) {
-          dispatch({
-            type: 'UPDATE_TASK',
-            payload: {
-              ...template,
-              rotation,
-              assignment: assignment ?? prevAssignment,
-            },
-          });
-        }
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.tasks.length, state.children.length, today]);
+  // Note: We no longer auto-generate instances on mount.
+  // The projection engine in ChildColumn handles displaying tasks for today and the future.
+  // Instances are only created ('realized') when users interact with them (complete, move, etc).
   
   const updateScrollIndicators = () => {
     const grid = gridRef.current;

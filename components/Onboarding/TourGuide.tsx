@@ -197,6 +197,7 @@ export default function TourGuide({ active, onComplete, onSkip }: TourGuideProps
     // Create new tour
     const tour = new Shepherd.Tour({
       useModalOverlay: true,
+      keyboardNavigation: false, // Disable keyboard navigation to prevent arrow keys from triggering tour
       defaultStepOptions: {
         cancelIcon: {
           enabled: true

@@ -17,12 +17,11 @@ import Header from "./Header";
 import SettingsModal from "./modals/SettingsModal";
 import ConfirmationModal from "./modals/ConfirmationModal";
 import { useChoresApp } from "./ChoresAppContext";
-import OneOffTaskModal from "./modals/OneOffTaskModal";
 import SyncModal from "./modals/SyncModal";
 import EditChildModal from "./modals/EditChildModal";
 import AddChildModal from "./modals/AddChildModal";
 import TaskModal from "./modals/TaskModal";
-import Task from "../types/task";
+import Task, { RotationMode } from "../types/task";
 import TourGuide from "./Onboarding/TourGuide";
 
 interface LayoutProps {
@@ -31,14 +30,13 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [oneOffTaskOpen, setOneOffTaskOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
-  const [addTaskChildId, setAddTaskChildId] = useState<number|null>(null);
   const [editChildOpen, setEditChildOpen] = useState(false);
   const [editChildId, setEditChildId] = useState<number|null>(null);
   const [addChildOpen, setAddChildOpen] = useState(false);
   const [addUnifiedTaskOpen, setAddUnifiedTaskOpen] = useState(false);
   const [editUnifiedTaskOpen, setEditUnifiedTaskOpen] = useState(false);
+  const [taskModalDefaults, setTaskModalDefaults] = useState<{ type?: 'recurring' | 'oneoff'; childId?: number; rotationMode?: RotationMode }>({});
   const [initialTaskForEdit, setInitialTaskForEdit] = useState<Task | null>(null);
   const [editOption, setEditOption] = useState<'instance' | 'future' | 'template' | null>(null);
   const [editInstanceId, setEditInstanceId] = useState<string | null>(null);
@@ -69,7 +67,7 @@ export default function Layout({ children }: LayoutProps) {
   }, [state.parentSettings.onboardingCompleted, state.parentSettings.pins]);
   
   // Handler to open the unified TaskModal
-  const openAddUnifiedTaskModal = () => {
+  const openAddUnifiedTaskModal = (defaults?: { type?: 'recurring' | 'oneoff'; childId?: number; rotationMode?: RotationMode }) => {
     // Close Settings modal if open (UX principle: only one primary modal at a time)
     if (settingsOpen) {
       setSettingsOpen(false);
@@ -78,6 +76,10 @@ export default function Layout({ children }: LayoutProps) {
     if (addChildOpen) {
       setAddChildOpen(false);
     }
+    setTaskModalDefaults(defaults || {});
+    setInitialTaskForEdit(null);
+    setEditOption(null);
+    setEditInstanceId(null);
     setAddUnifiedTaskOpen(true);
   };
   
@@ -157,14 +159,16 @@ export default function Layout({ children }: LayoutProps) {
 
   // Handler to open AddTaskModal for a specific child (use unified TaskModal)
   const openAddTaskModal = (childId: number) => {
-    setAddTaskChildId(childId);
+    setTaskModalDefaults({ type: 'oneoff', childId, rotationMode: 'single-child' });
+    setInitialTaskForEdit(null);
+    setEditOption(null);
+    setEditInstanceId(null);
     setAddUnifiedTaskOpen(true);
   };
   
   // Handler to open OneOffTaskModal for a specific child
   const openOneOffTaskModal = (childId: number) => {
-    setAddTaskChildId(childId);
-    setOneOffTaskOpen(true);
+    openAddTaskModal(childId);
   };
 
   // Handler to open TaskEditModal for a specific task
@@ -208,8 +212,24 @@ export default function Layout({ children }: LayoutProps) {
           }}
           onSyncClick={() => setSyncOpen(true)}
         />
-        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        <TaskModal open={addUnifiedTaskOpen} onClose={() => setAddUnifiedTaskOpen(false)} />
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          onCreateTask={() => openAddUnifiedTaskModal()}
+          onEditTask={(taskId) => {
+            setSettingsOpen(false);
+            openTaskEditModal(taskId, 'template');
+          }}
+          onEditChild={(childId) => {
+            setSettingsOpen(false);
+            openEditChildModal(childId);
+          }}
+        />
+        <TaskModal
+          open={addUnifiedTaskOpen}
+          onClose={() => { setAddUnifiedTaskOpen(false); setTaskModalDefaults({}); }}
+          initialDefaults={taskModalDefaults}
+        />
         <TaskModal
           open={editUnifiedTaskOpen}
           onClose={() => { 
@@ -229,11 +249,6 @@ export default function Layout({ children }: LayoutProps) {
           child={state.children.find(child => child.id === editChildId) || null}
           onSave={handleEditChild}
           onDelete={handleDeleteChild}
-        />
-        <OneOffTaskModal 
-          open={oneOffTaskOpen} 
-          onClose={() => setOneOffTaskOpen(false)} 
-          childId={addTaskChildId || undefined}
         />
         <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
         <TourGuide 
@@ -264,7 +279,7 @@ export default function Layout({ children }: LayoutProps) {
         {/* Add Child/Chore buttons (demo, move to UI as needed) */}
         <div style={{ position: 'fixed', bottom: 10, right: 10, zIndex: 2000, pointerEvents: 'auto' }}>
           <button className="btn btn-primary" onClick={openAddChildModal} style={{marginRight: 4, pointerEvents: 'auto'}} data-tour="add-child-button">+ Add Child</button>
-          <button className="btn btn-primary" onClick={openAddUnifiedTaskModal} style={{pointerEvents: 'auto'}} data-tour="add-task-button">+ Add Chore</button>
+          <button className="btn btn-primary" onClick={() => openAddUnifiedTaskModal()} style={{pointerEvents: 'auto'}} data-tour="add-task-button">+ Add Chore</button>
         </div>
       </div>
     </ModalControlContext.Provider>

@@ -14,6 +14,7 @@ import type {
   Weekday,
 } from "../../types/task";
 import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule } from "../../utils/recurrenceBuilder";
+import { getTheoreticalAssignment } from "../../utils/projectionUtils";
 import PinModal from "./PinModal";
 import AlertModal from "./AlertModal";
 
@@ -28,11 +29,19 @@ export interface TaskModalProps {
   editOption?: 'instance' | 'future' | 'template' | null;
   // instance ID to edit (required when editOption is 'instance')
   editInstanceId?: string | null;
+  // defaults when creating a new task
+  initialDefaults?: {
+    childId?: number;
+    type?: TaskType;
+    rotationMode?: RotationMode;
+    rotationOrder?: number[];
+    linkedTaskId?: string;
+  };
 }
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export default function TaskModal({ open, onClose, initialTask = null, onSave, editOption = null, editInstanceId = null }: TaskModalProps) {
+export default function TaskModal({ open, onClose, initialTask = null, onSave, editOption = null, editInstanceId = null, initialDefaults }: TaskModalProps) {
   const { state, dispatch } = useChoresApp();
   const [title, setTitle] = useState("");
   const [emoji, setEmoji] = useState("");
@@ -42,11 +51,13 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [starReward, setStarReward] = useState(1);
   const [moneyReward, setMoneyReward] = useState(0);
   const [requirePin, setRequirePin] = useState(false);
+  const [voiceAnnouncements, setVoiceAnnouncements] = useState<boolean | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedChildIds, setSelectedChildIds] = useState<number[]>([]);
   const [rotationMode, setRotationMode] = useState<RotationMode>('single-child');
   const [rotationOrder, setRotationOrder] = useState<number[]>([]);
   const [linkedTaskId, setLinkedTaskId] = useState<string | undefined>(undefined);
+  const [linkedTaskOffset, setLinkedTaskOffset] = useState<number>(0);
 
   const [frequency, setFrequency] = useState<RecurrenceFrequency>('daily');
   const [interval, setInterval] = useState(1);
@@ -89,6 +100,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       setStarReward(typeof initialTask.stars === 'number' ? initialTask.stars : 1);
       setMoneyReward(typeof initialTask.money === 'number' ? initialTask.money : 0);
       setRequirePin(typeof initialTask.requirePin === 'boolean' ? initialTask.requirePin : false);
+      setVoiceAnnouncements(initialTask.voiceAnnouncements);
       const assignedIds =
         initialTask.assignment?.childIds ||
         initialTask.rotation?.assignedChildIds ||
@@ -108,7 +120,10 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
             : 'single-child';
       setRotationMode(initialTask.rotation?.mode || inferredMode || (assignedIds && assignedIds.length > 1 ? 'round-robin' : 'single-child'));
       setRotationOrder(initialTask.rotation?.rotationOrder || []);
-      setLinkedTaskId(initialTask.rotation?.linkedTaskId);
+      const loadedLinkedTaskId = initialTask.rotation?.linkedTaskId;
+      const loadedLinkedTaskOffset = initialTask.rotation?.linkedTaskOffset ?? 0;
+      setLinkedTaskId(loadedLinkedTaskId);
+      setLinkedTaskOffset(loadedLinkedTaskOffset);
 
       if (initialTask.schedule?.cronExpression) {
         setUseCron(true);
@@ -167,12 +182,24 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     } else {
       // reset
       setEditingId(null);
-      setTitle(''); setEmoji(''); setColor('#cccccc'); setType('recurring'); setStarReward(1); setMoneyReward(0); setRequirePin(false);
+      const defaultChildId = initialDefaults?.childId;
+      const defaultType = initialDefaults?.type || 'recurring';
+      const defaultRotationMode = initialDefaults?.rotationMode || (defaultChildId ? 'single-child' : 'single-child');
+      const defaultRotationOrder = initialDefaults?.rotationOrder || (defaultChildId ? [defaultChildId] : []);
+      setTitle('');
+      setEmoji('');
+      setColor('#cccccc');
+      setType(defaultType as 'recurring' | 'oneoff');
+      setStarReward(1);
+      setMoneyReward(0);
+      setRequirePin(false);
+      setVoiceAnnouncements(undefined);
       setIsTimed(false); setAllowedMinutes(5); setLatePenaltyPercent(50); setAutoApproveOnStop(false);
-      setRotationOrder([]);
-      setLinkedTaskId(undefined);
-      setSelectedChildIds([]);
-      setRotationMode('single-child');
+      setRotationOrder(defaultRotationOrder);
+      setLinkedTaskId(initialDefaults?.linkedTaskId);
+      setLinkedTaskOffset(0);
+      setSelectedChildIds(defaultChildId ? [defaultChildId] : []);
+      setRotationMode(defaultRotationMode);
       setFrequency('daily');
       setInterval(1);
       setSelectedWeekdays([1]);
@@ -190,7 +217,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       setTimezone(typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTask, open]);
+  }, [initialTask, open, initialDefaults]);
 
   const [mounted, setMounted] = useState(false);
 
@@ -286,6 +313,12 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedTaskId]); // Only run when linkedTaskId changes
 
+  useEffect(() => {
+    if (!linkedTaskId) {
+      setLinkedTaskOffset(0);
+    }
+  }, [linkedTaskId]);
+
   if (!open || !mounted) return null;
 
   const toggleChildSelection = (childId: number) => {
@@ -364,7 +397,10 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
     const schedulePayload = type === 'oneoff' ? undefined : schedulePreviewDefinition;
     const rotationStartDate =
-      initialTask?.assignment?.rotationStartDate || initialTask?.rotation?.startDate || nowIsoDate;
+      (editingId && (editOption === 'future' || editOption === 'template'))
+        ? nowIsoDate
+        : initialTask?.assignment?.rotationStartDate || initialTask?.rotation?.startDate || nowIsoDate;
+    const sanitizedLinkedTaskId = linkedTaskId && linkedTaskId !== id ? linkedTaskId : undefined;
     const assignmentPayload: TaskAssignmentSettings = {
       strategy:
         rotationMode === 'simultaneous'
@@ -384,6 +420,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       createdAt: new Date().toISOString(),
       enabled: true,
       requirePin,
+      ...(voiceAnnouncements !== undefined && { voiceAnnouncements }),
       stars: Number(starReward),
       money: Number(moneyReward),
       type: type as TaskType,
@@ -393,7 +430,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         assignedChildIds: normalizedChildIds,
         startDate: rotationStartDate,
         ...(rotationOrder.length > 0 && { rotationOrder }),
-        ...(linkedTaskId && { linkedTaskId }),
+        ...(sanitizedLinkedTaskId && { linkedTaskId: sanitizedLinkedTaskId, linkedTaskOffset: linkedTaskOffset }),
       },
       assignment: assignmentPayload,
       ...(schedulePayload ? { schedule: schedulePayload } : {}),
@@ -403,7 +440,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
           allowedSeconds: Math.round(allowedMinutes * 60),
           latePenaltyPercent: latePenaltyPercent / 100,
           autoApproveOnStop,
-          allowNegative: false,
+          allowNegative: latePenaltyPercent > 100,
         },
       } : {}),
       ...(type === 'oneoff' ? {
@@ -417,7 +454,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
     if (editingId) {
       // Handle different edit options
-      if (editOption === 'instance' && editInstanceId) {
+      const scope = editOption || 'template';
+      if (scope === 'instance' && editInstanceId) {
         // Edit just this instance
         const instance = state.taskInstances.find(inst => inst.id === editInstanceId);
         if (instance) {
@@ -436,9 +474,60 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         // Edit template (for 'future' or 'template' options, or default)
         dispatch({ type: 'UPDATE_TASK', payload: task });
         if (onSave) onSave(task);
+        
+        // For recurring tasks, we no longer pre-generate instances.
+        // The projection engine will calculate assignments on-the-fly.
+        // Only remove uncompleted instances if editing template/future.
+        if (scope === 'template' || scope === 'future') {
+          const todayDate = new Date().toISOString().split('T')[0];
+          const purgeDate = scope === 'future' ? todayDate : undefined;
+          
+          // Remove uncompleted instances from purgeDate forward (keep completed ones)
+          // The REPLACE_TASK_INSTANCES action will filter out uncompleted instances
+          dispatch({
+            type: 'REPLACE_TASK_INSTANCES',
+            payload: {
+              taskId: task.id,
+              startDate: purgeDate,
+              instances: [], // No new instances - projection engine handles it
+              preserveCompleted: true,
+            },
+          });
+        }
       }
     } else {
+      // Creating a new task
       dispatch({ type: 'ADD_TASK', payload: task });
+      
+      // For one-off tasks, create instances immediately for the due date
+      // One-off tasks are "realized" immediately since they're not recurring
+      if (type === 'oneoff' && task.oneOff?.dueDate) {
+        const dueDateStr = task.oneOff.dueDate.split('T')[0];
+        
+        // Use projection engine to determine assignments
+        const assignments = getTheoreticalAssignment(task, dueDateStr, [...state.tasks, task]);
+        
+        // Create instances for each assigned child
+        assignments.forEach((assign) => {
+          const child = state.children.find(c => c.id === assign.childId);
+          if (!child) return;
+          
+          const instance: TaskInstance = {
+            id: `oneoff_${task.id}_${child.id}_${dueDateStr}_${Date.now()}`,
+            templateId: task.id,
+            childId: child.id,
+            date: dueDateStr,
+            dueAt: task.oneOff?.dueDate,
+            stars: task.stars,
+            money: task.money,
+            completed: false,
+            createdAt: new Date().toISOString(),
+            rotationIndex: assign.rotationIndex
+          };
+          
+          dispatch({ type: 'ADD_TASK_INSTANCE', payload: instance });
+        });
+      }
     }
 
     onClose();
@@ -554,6 +643,19 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 checked={requirePin} 
                 onChange={e => setRequirePin(e.target.checked)} 
               />
+            </label>
+            <label>
+              Voice Announcements:
+              <input 
+                type="checkbox" 
+                checked={voiceAnnouncements !== false} 
+                onChange={e => setVoiceAnnouncements(e.target.checked ? true : false)} 
+              />
+              <span className="helper-text" style={{ display: 'block', fontSize: '0.85rem', color: '#666', marginTop: 4 }}>
+                {voiceAnnouncements !== false 
+                  ? 'This task will announce during timers and when scheduled (if enabled in Settings)'
+                  : 'This task will not use voice announcements'}
+              </span>
             </label>
 
             <fieldset className="form-section">
@@ -676,6 +778,16 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                         </option>
                       ))}
                   </select>
+                </label>
+              )}
+              {rotationMode === 'round-robin' && linkedTaskId && (
+                <label>
+                  Rotation offset (can be negative):
+                  <input
+                    type="number"
+                    value={linkedTaskOffset}
+                    onChange={(e) => setLinkedTaskOffset(Number(e.target.value))}
+                  />
                 </label>
               )}
             </fieldset>
@@ -914,10 +1026,12 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     <input 
                       type="number" 
                       value={latePenaltyPercent} 
-                      min={0}
-                      max={100}
+                      min={-500}
                       onChange={e => setLatePenaltyPercent(Number(e.target.value))} 
                     />
+                  <p className="helper-text">
+                    50 = half reward when late; 150 = -50% (debt).
+                  </p>
                   </label>
                   <label>
                     Auto-approve on Stop:
@@ -952,7 +1066,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         <PinModal 
           open={pinOpen} 
           onClose={() => { setPinOpen(false); setPendingSave(null); }} 
-          onSuccess={handlePinSuccess}
+          onSuccess={() => handlePinSuccess()}
           message="Enter a parent PIN to save changes to this task."
         />
         <AlertModal
@@ -1044,8 +1158,10 @@ function buildDueDate(date: string, time: string): string {
   const [hourStr = '00', minuteStr = '00'] = (time || '00:00').split(':');
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
+  // Create date in local timezone to avoid timezone conversion issues
   const due = new Date(`${baseDate}T00:00:00`);
   due.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0);
+  // Return ISO string - this is correct for storage, but we need to compare dates in local timezone
   return due.toISOString();
 }
 

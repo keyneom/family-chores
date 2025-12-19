@@ -8,6 +8,9 @@ import PinModal from "./PinModal";
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
+  onCreateTask: () => void;
+  onEditTask: (taskId: string) => void;
+  onEditChild?: (childId: number) => void;
 }
 
 type ApproverErrors = {
@@ -24,17 +27,10 @@ type ToastMessage = {
   durationMs?: number;
 };
 
-export default function SettingsModal({ open, onClose }: SettingsModalProps) {
+export default function SettingsModal({ open, onClose, onCreateTask, onEditTask, onEditChild }: SettingsModalProps) {
   const { state, dispatch } = useChoresApp();
   const [newChildName, setNewChildName] = useState("");
   const [newChildBlockchain, setNewChildBlockchain] = useState("");
-  const [newChoreName, setNewChoreName] = useState("");
-  const [newChoreEmoji, setNewChoreEmoji] = useState("");
-  const [newChoreColor, setNewChoreColor] = useState("#FFB6C1");
-  const [newChoreStars, setNewChoreStars] = useState(1);
-  const [newChoreMoney, setNewChoreMoney] = useState(0.5);
-  const [choreRecurrence, setChoreRecurrence] = useState("daily");
-  const [customDays, setCustomDays] = useState<number[]>([]);
   // Legacy single PIN removed. Approvers are managed via `pins` below.
   const [newPinHandle, setNewPinHandle] = useState("");
   const [newPinCode, setNewPinCode] = useState("");
@@ -52,6 +48,23 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [pinModalMessage, setPinModalMessage] = useState<string | undefined>();
   const pinModalActionRef = useRef<((actorHandle?: string) => void) | null>(null);
   const [localApprovals, setLocalApprovals] = useState(state.parentSettings.approvals);
+  const [localVoiceSettings, setLocalVoiceSettings] = useState(state.parentSettings.voiceAnnouncements || {
+    enabled: false,
+    volume: 1,
+    rate: 1,
+    pitch: 1,
+    timerAnnouncements: {
+      enabled: false,
+      announceAtPercentages: [0.5, 0.75, 0.9],
+      announceAtSecondsRemaining: [60, 30, 10],
+      announceAtStart: true,
+    },
+    scheduledAnnouncements: {
+      enabled: false,
+      announceMinutesBefore: [15, 5],
+      announceAtDueTime: true,
+    },
+  });
 
   useEffect(() => {
     setMounted(true);
@@ -62,8 +75,25 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (open) {
       setLocalApprovals(state.parentSettings.approvals);
+      setLocalVoiceSettings(state.parentSettings.voiceAnnouncements || {
+        enabled: false,
+        volume: 1,
+        rate: 1,
+        pitch: 1,
+        timerAnnouncements: {
+          enabled: false,
+          announceAtPercentages: [0.5, 0.75, 0.9],
+          announceAtSecondsRemaining: [60, 30, 10],
+          announceAtStart: true,
+        },
+        scheduledAnnouncements: {
+          enabled: false,
+          announceMinutesBefore: [15, 5],
+          announceAtDueTime: true,
+        },
+      });
     }
-  }, [open, state.parentSettings.approvals]);
+  }, [open, state.parentSettings.approvals, state.parentSettings.voiceAnnouncements]);
 
   useEffect(() => {
     return () => {
@@ -119,76 +149,12 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     setNewChildBlockchain("");
   };
 
-  const handleAddChore = () => {
-    if (!newChoreName.trim()) return;
-    
-    // Check if approval is required for editing tasks and children
-    const requiresApproval = state.parentSettings.approvals.editTasks;
-    const approvers = state.parentSettings.pins || [];
-    
-    const createTask = () => {
-      // Create unified Task with recurring property
-      const task = {
-        id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        title: newChoreName.trim(),
-        emoji: newChoreEmoji || "📝",
-        color: newChoreColor,
-        stars: newChoreStars,
-        money: newChoreMoney,
-        type: 'recurring' as const,
-        enabled: true,
-        createdAt: new Date().toISOString(),
-        description: '',
-        requirePin: false,
-        recurring: {
-          cadence: (choreRecurrence === 'weekdays' ? 'weekdays' :
-                   choreRecurrence === 'weekends' ? 'weekends' :
-                   choreRecurrence === 'custom-days' ? 'custom-days' :
-                   choreRecurrence === 'weekly' ? 'weekly' :
-                   choreRecurrence === 'monthly' ? 'monthly' : 'daily') as 'daily' | 'weekly' | 'monthly' | 'weekdays' | 'weekends' | 'custom-days',
-          customDays: choreRecurrence === "custom-days" ? customDays : undefined
-        }
-      };
-      dispatch({ type: "ADD_TASK", payload: task });
-      setNewChoreName("");
-      setNewChoreEmoji("");
-      setNewChoreColor("#FFB6C1");
-      setNewChoreStars(1);
-      setNewChoreMoney(0.5);
-      setChoreRecurrence("daily");
-      setCustomDays([]);
-      showToast('Task added', 'success');
-    };
-    
-    if (requiresApproval) {
-      if (approvers.length === 0) {
-        showAlert('Adding tasks requires parent approval, but no approvers are defined. Please add an approver first.');
-        return;
-      }
-      requestPinVerification('Enter a parent PIN to add a task.', (actorHandle) => {
-        createTask();
-      });
-      return;
-    }
-    
-    // No approval required
-    createTask();
-  };
-
   const handleDeleteChild = (childId: number) => {
     dispatch({ type: "DELETE_CHILD", payload: childId });
   };
 
   const handleDeleteChore = (taskId: string) => {
     dispatch({ type: "DELETE_TASK", payload: taskId });
-  };
-
-  const handleCustomDayChange = (day: number, checked: boolean) => {
-    if (checked) {
-      setCustomDays([...customDays, day]);
-    } else {
-      setCustomDays(customDays.filter(d => d !== day));
-    }
   };
 
   // legacy single PIN removed — no handler
@@ -334,6 +300,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const handleSaveSettings = () => {
     // Check if any approvals changed
     const approvalsChanged = JSON.stringify(localApprovals) !== JSON.stringify(state.parentSettings.approvals);
+    const voiceSettingsChanged = JSON.stringify(localVoiceSettings) !== JSON.stringify(state.parentSettings.voiceAnnouncements);
     
     if (approvalsChanged) {
       // Check if enabling any approval requires approvers
@@ -353,6 +320,17 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         type: 'UPDATE_PARENT_SETTINGS',
         payload: { approvals: localApprovals }
       });
+    }
+    
+    if (voiceSettingsChanged) {
+      // Save voice announcement settings
+      dispatch({
+        type: 'UPDATE_PARENT_SETTINGS',
+        payload: { voiceAnnouncements: localVoiceSettings }
+      });
+    }
+    
+    if (approvalsChanged || voiceSettingsChanged) {
       showToast('Settings saved', 'success');
     }
     
@@ -538,6 +516,135 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 {/* Additional approver verification happens on demand via PIN modal */}
 
           <div className="settings-section">
+            <h3>🔊 Voice Announcements</h3>
+            <div className="parent-settings">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <input 
+                  type="checkbox" 
+                  checked={localVoiceSettings.enabled} 
+                  onChange={(e) => setLocalVoiceSettings(prev => ({ ...prev, enabled: e.target.checked }))} 
+                /> 
+                Enable voice announcements
+              </label>
+              
+              {localVoiceSettings.enabled && (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: 'block', marginBottom: 4 }}>Volume: {Math.round(localVoiceSettings.volume * 100)}%</label>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="1" 
+                      step="0.1" 
+                      value={localVoiceSettings.volume} 
+                      onChange={(e) => setLocalVoiceSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))} 
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: 'block', marginBottom: 4 }}>Speech Rate: {localVoiceSettings.rate.toFixed(1)}x</label>
+                    <input 
+                      type="range" 
+                      min="0.5" 
+                      max="2" 
+                      step="0.1" 
+                      value={localVoiceSettings.rate} 
+                      onChange={(e) => setLocalVoiceSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))} 
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  
+                  <div style={{ marginBottom: 16, padding: 12, backgroundColor: '#f5f5f5', borderRadius: 4 }}>
+                    <h4 style={{ marginTop: 0, marginBottom: 8 }}>Timed Task Announcements</h4>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <input 
+                        type="checkbox" 
+                        checked={localVoiceSettings.timerAnnouncements?.enabled ?? false} 
+                        onChange={(e) => setLocalVoiceSettings(prev => ({ 
+                          ...prev, 
+                          timerAnnouncements: { 
+                            ...prev.timerAnnouncements, 
+                            enabled: e.target.checked,
+                            announceAtPercentages: prev.timerAnnouncements?.announceAtPercentages || [0.5, 0.75, 0.9],
+                            announceAtSecondsRemaining: prev.timerAnnouncements?.announceAtSecondsRemaining || [60, 30, 10],
+                            announceAtStart: prev.timerAnnouncements?.announceAtStart ?? true,
+                          } 
+                        }))} 
+                      /> 
+                      Announce during timed tasks
+                    </label>
+                    {localVoiceSettings.timerAnnouncements?.enabled && (
+                      <div style={{ marginLeft: 24, fontSize: '0.9rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <input 
+                            type="checkbox" 
+                            checked={localVoiceSettings.timerAnnouncements.announceAtStart ?? true} 
+                            onChange={(e) => setLocalVoiceSettings(prev => ({ 
+                              ...prev, 
+                              timerAnnouncements: { 
+                                ...prev.timerAnnouncements!, 
+                                announceAtStart: e.target.checked 
+                              } 
+                            }))} 
+                          /> 
+                          Announce when timer starts
+                        </label>
+                        <div style={{ marginTop: 8, fontSize: '0.85rem', color: '#666' }}>
+                          Announcements at: {localVoiceSettings.timerAnnouncements.announceAtPercentages?.map(p => `${Math.round(p * 100)}%`).join(', ')} complete
+                          {localVoiceSettings.timerAnnouncements.announceAtSecondsRemaining && 
+                            ` and ${localVoiceSettings.timerAnnouncements.announceAtSecondsRemaining.map(s => `${s}s`).join(', ')} remaining`}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div style={{ marginBottom: 16, padding: 12, backgroundColor: '#f5f5f5', borderRadius: 4 }}>
+                    <h4 style={{ marginTop: 0, marginBottom: 8 }}>Scheduled Task Announcements</h4>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <input 
+                        type="checkbox" 
+                        checked={localVoiceSettings.scheduledAnnouncements?.enabled ?? false} 
+                        onChange={(e) => setLocalVoiceSettings(prev => ({ 
+                          ...prev, 
+                          scheduledAnnouncements: { 
+                            ...prev.scheduledAnnouncements, 
+                            enabled: e.target.checked,
+                            announceMinutesBefore: prev.scheduledAnnouncements?.announceMinutesBefore || [15, 5],
+                            announceAtDueTime: prev.scheduledAnnouncements?.announceAtDueTime ?? true,
+                          } 
+                        }))} 
+                      /> 
+                      Announce upcoming scheduled tasks
+                    </label>
+                    {localVoiceSettings.scheduledAnnouncements?.enabled && (
+                      <div style={{ marginLeft: 24, fontSize: '0.9rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <input 
+                            type="checkbox" 
+                            checked={localVoiceSettings.scheduledAnnouncements.announceAtDueTime ?? true} 
+                            onChange={(e) => setLocalVoiceSettings(prev => ({ 
+                              ...prev, 
+                              scheduledAnnouncements: { 
+                                ...prev.scheduledAnnouncements!, 
+                                announceAtDueTime: e.target.checked 
+                              } 
+                            }))} 
+                          /> 
+                          Announce when task is due
+                        </label>
+                        <div style={{ marginTop: 8, fontSize: '0.85rem', color: '#666' }}>
+                          Reminders: {localVoiceSettings.scheduledAnnouncements.announceMinutesBefore?.map(m => `${m} min`).join(', ')} before
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="settings-section">
             <h3>👥 Children</h3>
             <div>
               {state.children.length === 0 ? (
@@ -592,7 +699,16 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                           <span className="child-name">{child.name}</span>
                           <div style={{ fontSize: '0.8rem', color: '#666' }}>{child.blockchainAddress || <em>No address</em>}</div>
                         </div>
-                        <div className="child-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <div className="child-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {onEditChild && (
+                            <button
+                              className="btn btn-small"
+                              onClick={() => onEditChild(child.id)}
+                              title="Edit child"
+                            >
+                              Edit
+                            </button>
+                          )}
                           <button 
                             className="btn btn-small" 
                             onClick={handleMoveUp}
@@ -638,131 +754,35 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           </div>
 
           <div className="settings-section">
-            <h3>📝 Tasks</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0 }}>📝 Tasks</h3>
+              <button className="btn btn-primary" onClick={onCreateTask}>+ New Task</button>
+            </div>
             <div>
               {!state.tasks || state.tasks.length === 0 ? (
-                <div className="empty-state">No tasks created yet. Add your first task below.</div>
+                <div className="empty-state">No tasks created yet. Use &quot;+ New Task&quot; for the full editor.</div>
               ) : (
-                state.tasks
-                  .filter(task => task.type === 'recurring' || task.recurring) // Show recurring tasks
-                  .map((task) => {
-                    const cadence = task.recurring?.cadence || 'daily';
-                    let recurrenceDesc: string;
-                    if (cadence === 'custom-days' && task.recurring?.customDays && task.recurring.customDays.length > 0) {
-                      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                      const selectedDays = task.recurring.customDays.map(d => dayNames[d]).join(', ');
-                      recurrenceDesc = selectedDays;
-                    } else if (cadence === 'weekdays') {
-                      recurrenceDesc = 'Weekdays only';
-                    } else if (cadence === 'weekends') {
-                      recurrenceDesc = 'Weekends only';
-                    } else if (cadence === 'weekly') {
-                      recurrenceDesc = 'Weekly';
-                    } else if (cadence === 'monthly') {
-                      recurrenceDesc = 'Monthly';
-                    } else {
-                      recurrenceDesc = 'Daily';
-                    }
-                    return (
-                      <div key={task.id} className="chore-item">
-                        <div className="chore-info">
-                          <span>{task.emoji || '📝'} {task.title}</span>
-                          <div style={{ fontSize: "0.8rem", color: "#666" }}>
-                            ⭐ {task.stars || 0} | 💰 ${task.money || 0} | {recurrenceDesc}
-                          </div>
-                        </div>
-                        <div className="chore-actions">
-                          <button className="btn btn-small btn-danger" onClick={() => handleDeleteChore(task.id)}>Delete</button>
+                state.tasks.map((task) => {
+                  const cadence = task.recurring?.cadence || 'custom';
+                  const recurrenceDesc = task.type === 'oneoff' || task.oneOff
+                    ? 'One-off'
+                    : cadence;
+                  return (
+                    <div key={task.id} className="chore-item">
+                      <div className="chore-info">
+                        <span>{task.emoji || '📝'} {task.title}</span>
+                        <div style={{ fontSize: "0.8rem", color: "#666" }}>
+                          ⭐ {task.stars || 0} | 💰 ${task.money || 0} | {recurrenceDesc}
                         </div>
                       </div>
-                    );
-                  })
+                      <div className="chore-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button className="btn btn-small" onClick={() => onEditTask(task.id)}>Edit</button>
+                        <button className="btn btn-small btn-danger" onClick={() => handleDeleteChore(task.id)}>Delete</button>
+                      </div>
+                    </div>
+                  );
+                })
               )}
-            </div>
-            <div className="add-chore-form">
-              <div className="input-group">
-                <input
-                  type="text"
-                  placeholder="Chore name"
-                  value={newChoreName}
-                  onChange={(e) => setNewChoreName(e.target.value)}
-                />
-                <input
-                  type="text"
-                  placeholder="Emoji"
-                  maxLength={2}
-                  value={newChoreEmoji}
-                  onChange={(e) => setNewChoreEmoji(e.target.value)}
-                />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>Color:</span>
-                  <input
-                    type="color"
-                    value={newChoreColor}
-                    onChange={(e) => setNewChoreColor(e.target.value)}
-                    aria-label="Task color"
-                  />
-                </label>
-              </div>
-              <div className="input-group">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>Star Reward:</span>
-                  <input
-                    type="number"
-                    placeholder="Stars"
-                    min={1}
-                    max={5}
-                    value={newChoreStars}
-                    onChange={(e) => setNewChoreStars(Number(e.target.value))}
-                    aria-label="Star reward"
-                  />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>Money Reward:</span>
-                  <input
-                    type="number"
-                    placeholder="Money ($)"
-                    min={0}
-                    step={0.25}
-                    value={newChoreMoney}
-                    onChange={(e) => setNewChoreMoney(Number(e.target.value))}
-                    aria-label="Money reward"
-                  />
-                </label>
-              </div>
-              <div className="recurrence-group">
-                <label htmlFor="choreRecurrence">Repeat:</label>
-                <select
-                  id="choreRecurrence"
-                  value={choreRecurrence}
-                  onChange={(e) => setChoreRecurrence(e.target.value)}
-                >
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="weekdays">Weekdays Only</option>
-                  <option value="weekends">Weekends Only</option>
-                  <option value="custom-days">Specific Days</option>
-                </select>
-              </div>
-              {choreRecurrence === "custom-days" && (
-                <div className="custom-days">
-                  <label>Select days:</label>
-                  <div className="days-checkboxes">
-                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, index) => (
-                      <label key={index}>
-                        <input
-                          type="checkbox"
-                          checked={customDays.includes(index)}
-                          onChange={(e) => handleCustomDayChange(index, e.target.checked)}
-                        />
-                        {day}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <button className="btn btn-primary" onClick={handleAddChore}>Add Chore</button>
             </div>
           </div>
         </div>

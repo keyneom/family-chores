@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { useChoresApp } from "../ChoresAppContext";
 
 interface PinModalProps {
@@ -56,7 +57,7 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
     onClose();
   };
 
-  return (
+  const modalContent = (
     <div className="modal-overlay" onClick={handleClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -87,4 +88,9 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
       </div>
     </div>
   );
+
+  // Use portal to render modal at document root to prevent it from being constrained by parent containers
+  return typeof document !== 'undefined' 
+    ? createPortal(modalContent, document.body)
+    : null;
 }

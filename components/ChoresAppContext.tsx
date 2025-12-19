@@ -99,6 +99,28 @@ export interface ChoreTemplate {
   customDays?: number[];
 }
 
+export interface VoiceAnnouncementSettings {
+  enabled: boolean;
+  volume: number; // 0-1
+  rate: number; // 0.1-10, default ~1
+  pitch: number; // 0-2, default 1
+  // Timer-specific settings
+  timerAnnouncements?: {
+    enabled: boolean;
+    announceAtPercentages?: number[]; // e.g., [0.5, 0.75, 0.9]
+    announceAtSecondsRemaining?: number[]; // e.g., [60, 30, 10]
+    announceAtStart?: boolean;
+    messageFormat?: string;
+  };
+  // Scheduled task-specific settings
+  scheduledAnnouncements?: {
+    enabled: boolean;
+    announceMinutesBefore?: number[]; // e.g., [15, 5]
+    announceAtDueTime?: boolean;
+    messageFormat?: string;
+  };
+}
+
 export interface ParentSettings {
   approvals: {
     taskMove: boolean;
@@ -114,6 +136,8 @@ export interface ParentSettings {
   childDisplayOrder?: number[];
   // Track if onboarding/tutorial has been completed or skipped
   onboardingCompleted?: boolean;
+  // Voice announcement settings
+  voiceAnnouncements?: VoiceAnnouncementSettings;
 }
 
 /**
@@ -187,6 +211,7 @@ type ChoresAppAction =
   | { type: "DELETE_TASK"; payload: string } // template id
   | { type: "DISABLE_TASK_AFTER_DATE"; payload: { taskId: string; date: string } } // disable task after this date (ISO date string)
   | { type: "ADD_TASK_INSTANCE"; payload: TaskInstance }
+  | { type: "REPLACE_TASK_INSTANCES"; payload: { taskId: string; startDate?: string; instances: TaskInstance[]; preserveCompleted?: boolean } }
   | { type: "UPDATE_TASK_INSTANCE"; payload: TaskInstance }
   | { type: "DELETE_TASK_INSTANCE"; payload: string } // instance id
   | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number } } // Legacy
@@ -389,6 +414,10 @@ function buildRotationSettings(
     history: assignmentSettings.history,
     allowSimultaneous: assignmentSettings.allowSimultaneous,
     groupId: assignmentSettings.groupId,
+    // Preserve linked rotation settings and rotation order from original task
+    ...(task.rotation?.linkedTaskId && { linkedTaskId: task.rotation.linkedTaskId }),
+    ...(task.rotation?.linkedTaskOffset !== undefined && { linkedTaskOffset: task.rotation.linkedTaskOffset }),
+    ...(task.rotation?.rotationOrder && task.rotation.rotationOrder.length > 0 && { rotationOrder: task.rotation.rotationOrder }),
   };
 }
 
@@ -462,15 +491,22 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         ),
         actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK', action.payload) ],
       };
-    case "START_TIMER":
+    case "START_TIMER": {
+      const existingTimers = { ...(state.timers || {}) };
+      // Remove any existing timers with the same taskKey and childId to prevent duplicates
+      const timersWithSameKey = Object.values(existingTimers).filter(t => t.taskKey === action.payload.timer.taskKey && t.childId === action.payload.timer.childId);
+      // Remove existing timers with the same taskKey/childId
+      timersWithSameKey.forEach(t => {
+        delete existingTimers[t.id];
+      });
+      // Add the new timer
+      existingTimers[action.payload.timer.id] = action.payload.timer;
       return {
         ...state,
-        timers: {
-          ...(state.timers || {}),
-          [action.payload.timer.id]: action.payload.timer,
-        },
+        timers: existingTimers,
         actionLog: [ ...(state.actionLog || []), makeLogEntry('START_TIMER', { timer: action.payload.timer }) ],
       };
+    }
     case "ADD_TASK": {
       const normalizedTask = normalizeTaskPayload(action.payload);
       return {
@@ -517,6 +553,28 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         taskInstances: [ ...state.taskInstances, action.payload ],
         actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_TASK_INSTANCE', { instance: action.payload }) ],
       };
+    case "REPLACE_TASK_INSTANCES": {
+      const { taskId, startDate, instances, preserveCompleted } = action.payload;
+      const filtered = state.taskInstances.filter(inst => {
+        if (inst.templateId !== taskId) return true;
+        if (preserveCompleted && inst.completed) return true;
+        if (startDate) {
+          return inst.date < startDate;
+        }
+        return false;
+      });
+      const merged = [...filtered];
+      instances.forEach((inst) => {
+        if (!merged.some(existing => existing.id === inst.id)) {
+          merged.push(inst);
+        }
+      });
+      return {
+        ...state,
+        taskInstances: merged,
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('REPLACE_TASK_INSTANCES', { taskId, startDate, added: instances.length }) ],
+      };
+    }
     case "UPDATE_TASK_INSTANCE":
       return {
         ...state,
@@ -560,7 +618,9 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
     case "STOP_TIMER": {
       const timers = { ...(state.timers || {}) };
       const timer = timers[action.payload.timerId];
-      if (!timer) return state;
+      if (!timer) {
+        return state;
+      }
       // compute elapsed and reward
       const started = new Date(timer.startedAt).getTime();
       const stopped = new Date(action.payload.stoppedAt).getTime();
@@ -605,7 +665,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         }
       }
       
-      const rewardPercentage = elapsedSeconds <= allowed ? 1 : latePenalty;
+      const rewardPercentage = elapsedSeconds <= allowed ? 1 : 1 - latePenalty;
       // Stars shouldn't scale; if completed on time give full stars, otherwise no stars for late completion
       const adjustedStars = elapsedSeconds <= allowed ? baseStarReward : 0;
       const adjustedMoney = +(baseMoneyReward * rewardPercentage);

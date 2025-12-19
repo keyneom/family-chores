@@ -8,8 +8,10 @@ import DeleteTaskModal, { DeleteOption } from "./modals/DeleteTaskModal";
 import EditTaskConfirmModal, { EditOption } from "./modals/EditTaskConfirmModal";
 import TimedCountdown from "./TimedCountdown";
 import useTimer from "./hooks/useTimer";
+import useTimerAnnouncements from "./hooks/useTimerAnnouncements";
 import type { Task, TimedCompletion, TaskInstance } from "../types/task";
 import { getTodayString } from "../utils/dateUtils";
+import { formatDateTimeCompact } from "../utils/dateUtils";
 
 // Renderable shape used by the UI (Task with metadata added by ChildColumn)
 interface RenderableTask extends Task {
@@ -65,7 +67,45 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const instanceDate = actualInstance?.date || today;
   const taskKey = normalized.taskKey || `${childId}-${normalized.id}-${instanceDate}`;
   const isCompleted = actualInstance ? actualInstance.completed : normalized.isCompleted;
-  const { activeTimer, start, stop, canStopNow } = useTimer(taskKey, childId);
+  const { activeTimer, start, stop } = useTimer(taskKey, childId);
+  
+  // Get child name for announcements
+  const child = state.children.find(c => c.id === childId);
+  const childName = child?.name || 'Child';
+  
+  // Get active timer from state for announcements
+  // Look up the actual timer from state to get the full Timer object
+  const timerForAnnouncements = React.useMemo(() => {
+    if (!activeTimer || !state.timers) return undefined;
+    const timer = Object.values(state.timers).find(
+      (t) => t.id === activeTimer.id
+    );
+    return timer;
+  }, [activeTimer, state.timers]);
+  
+  // Voice announcements for timed tasks
+  // Only announce if: global is enabled AND timer announcements are enabled AND this task has voiceAnnouncements enabled
+  const voiceSettings = state.parentSettings.voiceAnnouncements;
+  const taskVoiceEnabled = normalized.voiceAnnouncements !== false; // true if undefined or explicitly true
+  const shouldAnnounce = voiceSettings?.enabled && 
+                         voiceSettings?.timerAnnouncements?.enabled && 
+                         taskVoiceEnabled;
+  
+  useTimerAnnouncements(
+    timerForAnnouncements,
+    normalized.timed ? normalized : undefined,
+    childName,
+    shouldAnnounce ? {
+      enabled: true,
+      volume: voiceSettings.volume ?? 1,
+      rate: voiceSettings.rate ?? 1,
+      pitch: voiceSettings.pitch ?? 1,
+      announceAtPercentages: voiceSettings.timerAnnouncements?.announceAtPercentages,
+      announceAtSecondsRemaining: voiceSettings.timerAnnouncements?.announceAtSecondsRemaining,
+      announceAtStart: voiceSettings.timerAnnouncements?.announceAtStart,
+      messageFormat: voiceSettings.timerAnnouncements?.messageFormat,
+    } : { enabled: false }
+  );
   
   // Look up pending completion directly from state (in case it wasn't passed in the task prop)
   const pendingCompletion = React.useMemo(() => {
@@ -150,16 +190,42 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
 
   const performCompletion = () => {
     if (actualInstance) {
-      // Use instance-based completion
-      dispatch({
-        type: 'COMPLETE_TASK_INSTANCE',
-        payload: {
-          instanceId: actualInstance.id,
-          childId,
-          starReward: Number((actualInstance.stars ?? normalized.stars) || 0),
-          moneyReward: Number((actualInstance.money ?? normalized.money) || 0),
-        },
-      });
+      // Check if this is a projected instance (not yet in DB)
+      const isProjected = actualInstance.id.startsWith('projected_') || actualInstance.id.startsWith('scheduled_');
+      
+      if (isProjected) {
+        // Realize the instance first, then complete it
+        const realizedInstance: TaskInstance = {
+          ...actualInstance,
+          id: `realized_${normalized.id}_${childId}_${actualInstance.date}_${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        };
+        
+        // Add the instance
+        dispatch({ type: 'ADD_TASK_INSTANCE', payload: realizedInstance });
+        
+        // Then complete it
+        dispatch({
+          type: 'COMPLETE_TASK_INSTANCE',
+          payload: {
+            instanceId: realizedInstance.id,
+            childId,
+            starReward: Number((realizedInstance.stars ?? normalized.stars) || 0),
+            moneyReward: Number((realizedInstance.money ?? normalized.money) || 0),
+          },
+        });
+      } else {
+        // Instance already exists in DB, just complete it
+        dispatch({
+          type: 'COMPLETE_TASK_INSTANCE',
+          payload: {
+            instanceId: actualInstance.id,
+            childId,
+            starReward: Number((actualInstance.stars ?? normalized.stars) || 0),
+            moneyReward: Number((actualInstance.money ?? normalized.money) || 0),
+          },
+        });
+      }
     } else if (taskKey) {
       // Fallback to legacy completion
       dispatch({
@@ -263,6 +329,19 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const stars = actualInstance?.stars ?? normalized.stars ?? 0;
   const money = actualInstance?.money ?? normalized.money ?? 0;
   const completed = isCompleted;
+  const dueLabel = React.useMemo(() => {
+    const isoDate = actualInstance?.dueAt || actualInstance?.date;
+    if (!isoDate) return null;
+    return formatDateTimeCompact(isoDate);
+  }, [actualInstance]);
+  const isOverdue = React.useMemo(() => {
+    if (completed) return false;
+    const dueIso = actualInstance?.dueAt;
+    if (!dueIso || !dueIso.includes('T')) return false;
+    const due = new Date(dueIso);
+    if (Number.isNaN(due.getTime())) return false;
+    return Date.now() > due.getTime();
+  }, [actualInstance, completed]);
 
   return (
     <div
@@ -271,6 +350,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
       draggable={!completed}
       onDragStart={handleDragStart}
       data-task-id={normalized.id}
+      data-task-title={title}
     >
       {!completed && <span className="drag-handle">⋮⋮</span>}
       <div className="task-info">
@@ -281,8 +361,19 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           </div>
         )}
         <div className="task-details">
-          <div className="task-name">{title}</div>
-          <div className="task-reward">
+          <div
+            className="task-header-row"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}
+          >
+            <div className="task-name">{title}</div>
+            {(dueLabel || isOverdue) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: isOverdue ? '#e53e3e' : '#4a5568', fontSize: '0.9rem' }}>
+                {isOverdue && <span title="Overdue">⚠︎</span>}
+                {dueLabel && <span className="task-due-inline">{dueLabel}</span>}
+              </div>
+            )}
+          </div>
+          <div className="task-reward" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <span>⭐ {Number(stars)}</span>
             <span>💰 ${Number(money).toFixed(2)}</span>
           </div>
@@ -307,8 +398,8 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
               <button className="forgive-btn" onClick={handleForgive}>Forgive</button>
             </div>
           ) : activeTimer ? (
-            // Timer is running, show Stop button
-            <button className="complete-btn" onClick={handleStop} disabled={!canStopNow}>
+            // Timer is running, show Stop button (always enabled - removed canStopNow check)
+            <button className="complete-btn" onClick={handleStop}>
               Stop
             </button>
           ) : (
@@ -321,7 +412,10 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
         <button
           className="btn-icon-text btn-edit"
           onClick={handleEdit}
-          title="Edit task"
+          title={`Edit task: ${title}`}
+          aria-label={`Edit task: ${title}`}
+          data-task-id={normalized.id}
+          data-task-title={title}
         >
           <span className="btn-icon">✏️</span>
           <span className="btn-text">Edit</span>

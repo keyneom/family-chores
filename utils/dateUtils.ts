@@ -41,6 +41,46 @@ export function compareLocalDates(date1: string, date2: string): number {
   return d1 < d2 ? -1 : d1 > d2 ? 1 : 0;
 }
 
+/**
+ * Format an ISO date/time or YYYY-MM-DD string into a readable local string.
+ * If only a date is provided, it omits the time portion.
+ */
+export function formatDateTime(iso: string): string {
+  if (!iso) return '';
+  const hasTime = iso.includes('T');
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const options: Intl.DateTimeFormatOptions = hasTime
+    ? { dateStyle: 'medium', timeStyle: 'short' }
+    : { dateStyle: 'medium' };
+  return Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+/**
+ * Compact formatter for tight UI spaces.
+ * - With time: M/D, h:mm (24h/12h per locale)
+ * - Date only: M/D
+ */
+export function formatDateTimeCompact(iso: string): string {
+  if (!iso) return '';
+  const hasTime = iso.includes('T');
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const options: Intl.DateTimeFormatOptions = hasTime
+    ? { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+    : { month: 'numeric', day: 'numeric' };
+  return Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+/**
+ * Get the previous day's date as YYYY-MM-DD string
+ */
+export function getPreviousDay(dateStr: string): string {
+  const date = parseLocalDate(dateStr);
+  date.setDate(date.getDate() - 1);
+  return getLocalDateString(date);
+}
+
 
 
 
