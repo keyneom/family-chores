@@ -300,18 +300,18 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   }, [rotationMode, selectedChildIds.length]); // Only run when mode changes or selection count changes
 
   // Sync rotationOrder when linked task changes
-  useEffect(() => {
-    if (linkedTaskId && rotationMode === 'round-robin' && selectedChildIds.length > 0) {
+  // When linked, get the rotation order from the linked task for display only (not stored)
+  const linkedTaskRotationOrder = useMemo(() => {
+    if (linkedTaskId && rotationMode === 'round-robin') {
       const linkedTask = state.tasks.find(t => t.id === linkedTaskId);
-      if (linkedTask?.rotation?.rotationOrder) {
-        // Use the linked task's rotation order, but filter to only include selected children
-        const linkedOrder = linkedTask.rotation.rotationOrder.filter(id => selectedChildIds.includes(id));
-        const missingChildren = selectedChildIds.filter(id => !linkedOrder.includes(id));
-        setRotationOrder([...linkedOrder, ...missingChildren]);
+      if (linkedTask?.rotation) {
+        return linkedTask.rotation?.rotationOrder || 
+               linkedTask.rotation?.assignedChildIds || 
+               linkedTask.assignedChildIds || [];
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedTaskId]); // Only run when linkedTaskId changes
+    return [];
+  }, [linkedTaskId, rotationMode, state.tasks]);
 
   useEffect(() => {
     if (!linkedTaskId) {
@@ -393,14 +393,20 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const performSave = () => {
     const id = editingId ?? `task_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     const nowIsoDate = new Date().toISOString().split('T')[0];
-    const normalizedChildIds = selectedChildIds.length > 0 ? selectedChildIds : state.children.map(child => child.id);
+    const sanitizedLinkedTaskId = linkedTaskId && linkedTaskId !== id ? linkedTaskId : undefined;
+    
+    // When linked, don't store assignedChildIds or rotationOrder - read from linked task
+    // When not linked, use selectedChildIds and rotationOrder
+    const normalizedChildIds = sanitizedLinkedTaskId 
+      ? [] // Will be read from linked task
+      : (selectedChildIds.length > 0 ? selectedChildIds : state.children.map(child => child.id));
 
     const schedulePayload = type === 'oneoff' ? undefined : schedulePreviewDefinition;
     const rotationStartDate =
       (editingId && (editOption === 'future' || editOption === 'template'))
         ? nowIsoDate
         : initialTask?.assignment?.rotationStartDate || initialTask?.rotation?.startDate || nowIsoDate;
-    const sanitizedLinkedTaskId = linkedTaskId && linkedTaskId !== id ? linkedTaskId : undefined;
+    
     const assignmentPayload: TaskAssignmentSettings = {
       strategy:
         rotationMode === 'simultaneous'
@@ -429,7 +435,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         mode: rotationMode,
         assignedChildIds: normalizedChildIds,
         startDate: rotationStartDate,
-        ...(rotationOrder.length > 0 && { rotationOrder }),
+        // Only store rotationOrder if not linked (linked tasks read from their anchor)
+        ...(!sanitizedLinkedTaskId && rotationOrder.length > 0 && { rotationOrder }),
         ...(sanitizedLinkedTaskId && { linkedTaskId: sanitizedLinkedTaskId, linkedTaskOffset: linkedTaskOffset }),
       },
       assignment: assignmentPayload,
@@ -660,106 +667,23 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
             <fieldset className="form-section">
               <legend>Assignment</legend>
-              {state.children.length === 0 ? (
-                <p className="helper-text">Add children first to assign tasks.</p>
-              ) : (
-                <div className="child-multi-select">
-                  <div className="assignment-actions">
-                    <button type="button" className="btn btn-ghost" onClick={handleToggleAllChildren}>
-                      {allChildrenSelected ? 'Deselect all' : 'Select all'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={handleClearChildren}
-                      disabled={selectedChildIds.length === 0}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  {state.children.map((child) => (
-                    <label key={child.id} className="checkbox-item">
-                      <input
-                        type="checkbox"
-                        checked={selectedChildIds.includes(child.id)}
-                        onChange={() => toggleChildSelection(child.id)}
-                      />
-                      {child.name}
-                    </label>
-                  ))}
-                </div>
-              )}
-              <label>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  Rotation Mode:
-                  <span 
-                    title="How the task is assigned: Single child (stays with one), Rotate (takes turns), or Simultaneous (all children get it)."
-                    style={{ 
-                      cursor: 'help', 
-                      fontSize: '14px',
-                      color: '#666',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '50%',
-                      background: '#e2e8f0',
-                      lineHeight: '1'
-                    }}
+              {rotationMode === 'round-robin' && (
+                <label>
+                  Link rotation with another task:
+                  <select 
+                    value={linkedTaskId || ''} 
+                    onChange={(e) => setLinkedTaskId(e.target.value || undefined)}
                   >
-                    ℹ️
-                  </span>
-                </span>
-                <select value={rotationMode} onChange={(e) => setRotationMode(e.target.value as RotationMode)}>
-                  <option value="single-child">Single child</option>
-                  <option value="round-robin">Rotate across children</option>
-                  <option value="simultaneous">Assign to all selected children</option>
-                </select>
-              </label>
-              <p className="helper-text">{rotationHelperText}</p>
-              
-              {rotationMode === 'round-robin' && selectedChildIds.length > 1 && (
-                <div className="rotation-order-section">
-                  <label>Rotation Order:</label>
-                  <p className="helper-text">Drag to reorder which child the task rotates to first, second, third, etc.</p>
-                  <div className="rotation-order-list">
-                    {rotationOrder.length > 0 ? (
-                      rotationOrder.map((childId, index) => {
-                        const child = state.children.find(c => c.id === childId);
-                        if (!child) return null;
-                        return (
-                          <div key={childId} className="rotation-order-item">
-                            <span className="rotation-order-number">{index + 1}.</span>
-                            <span className="rotation-order-name">{child.name}</span>
-                            <div className="rotation-order-controls">
-                              <button
-                                type="button"
-                                className="btn-icon"
-                                onClick={() => moveChildInOrder(childId, 'up')}
-                                disabled={index === 0}
-                                title="Move up"
-                              >
-                                ↑
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-icon"
-                                onClick={() => moveChildInOrder(childId, 'down')}
-                                disabled={index === rotationOrder.length - 1}
-                                title="Move down"
-                              >
-                                ↓
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <p className="helper-text">Select children above to set rotation order</p>
-                    )}
-                  </div>
-                </div>
+                    <option value="">None (independent rotation)</option>
+                    {state.tasks
+                      .filter(t => t.id !== editingId && t.rotation?.mode === 'round-robin')
+                      .map(task => (
+                        <option key={task.id} value={task.id}>
+                          {task.title || 'Untitled task'}
+                        </option>
+                      ))}
+                  </select>
+                </label>
               )}
               
               {rotationMode === 'round-robin' && (
@@ -780,15 +704,203 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                   </select>
                 </label>
               )}
-              {rotationMode === 'round-robin' && linkedTaskId && (
-                <label>
-                  Rotation offset (can be negative):
-                  <input
-                    type="number"
-                    value={linkedTaskOffset}
-                    onChange={(e) => setLinkedTaskOffset(Number(e.target.value))}
-                  />
-                </label>
+              
+              {rotationMode === 'round-robin' && linkedTaskId ? (
+                // When linked, show a read-only list derived from the linked task
+                <div>
+                  <label>Rotation Order (from linked task):</label>
+                  <p className="helper-text">
+                    This task uses the rotation order from &quot;{state.tasks.find(t => t.id === linkedTaskId)?.title || 'linked task'}&quot;. 
+                    Edit that task to change which children are assigned and their order.
+                  </p>
+                  <div className="rotation-order-list">
+                    {linkedTaskRotationOrder.length > 0 ? (
+                      linkedTaskRotationOrder.map((childId, index) => {
+                        const child = state.children.find(c => c.id === childId);
+                        if (!child) return null;
+                        return (
+                          <div key={childId} className="rotation-order-item" style={{ opacity: 0.7 }}>
+                            <span className="rotation-order-number">{index + 1}.</span>
+                            <span className="rotation-order-name">{child.name}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="helper-text">No children assigned in linked task</p>
+                    )}
+                  </div>
+                  <label style={{ marginTop: '12px' }}>
+                    Rotation offset (can be negative):
+                    <input
+                      type="number"
+                      value={linkedTaskOffset}
+                      onChange={(e) => setLinkedTaskOffset(Number(e.target.value))}
+                    />
+                    <span className="helper-text" style={{ display: 'block', marginTop: '4px' }}>
+                      Offset 0 = same child as linked task, 1 = next child, -1 = previous child, etc.
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                // When not linked, show combined selection + ordering UI
+                <>
+                  {state.children.length === 0 ? (
+                    <p className="helper-text">Add children first to assign tasks.</p>
+                  ) : (
+                    <>
+                      <label>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          Rotation Mode:
+                          <span 
+                            title="How the task is assigned: Single child (stays with one), Rotate (takes turns), or Simultaneous (all children get it)."
+                            style={{ 
+                              cursor: 'help', 
+                              fontSize: '14px',
+                              color: '#666',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '50%',
+                              background: '#e2e8f0',
+                              lineHeight: '1'
+                            }}
+                          >
+                            ℹ️
+                          </span>
+                        </span>
+                        <select value={rotationMode} onChange={(e) => setRotationMode(e.target.value as RotationMode)}>
+                          <option value="single-child">Single child</option>
+                          <option value="round-robin">Rotate across children</option>
+                          <option value="simultaneous">Assign to all selected children</option>
+                        </select>
+                      </label>
+                      <p className="helper-text">{rotationHelperText}</p>
+                      
+                      {rotationMode === 'round-robin' ? (
+                        // Round-robin: Combined reorderable list (selection + ordering in one)
+                        <div className="rotation-order-section">
+                          <label>Children and Rotation Order:</label>
+                          <p className="helper-text">Select children and reorder them. The order determines rotation sequence.</p>
+                          <div className="rotation-order-list">
+                            {/* Show selected children in rotation order first */}
+                            {rotationOrder.map((childId, orderIndex) => {
+                              const child = state.children.find(c => c.id === childId);
+                              if (!child) return null;
+                              
+                              return (
+                                <div 
+                                  key={childId} 
+                                  className="rotation-order-item"
+                                >
+                                  <label style={{ display: 'flex', alignItems: 'center', flex: 1, cursor: 'pointer' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={true}
+                                      onChange={() => toggleChildSelection(childId)}
+                                      style={{ marginRight: '8px' }}
+                                    />
+                                    <span className="rotation-order-number" style={{ marginRight: '8px', minWidth: '24px' }}>
+                                      {orderIndex + 1}.
+                                    </span>
+                                    <span className="rotation-order-name">{child.name}</span>
+                                  </label>
+                                  <div className="rotation-order-controls">
+                                    <button
+                                      type="button"
+                                      className="btn-icon"
+                                      onClick={() => moveChildInOrder(childId, 'up')}
+                                      disabled={orderIndex === 0}
+                                      title="Move up"
+                                    >
+                                      ↑
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-icon"
+                                      onClick={() => moveChildInOrder(childId, 'down')}
+                                      disabled={orderIndex === rotationOrder.length - 1}
+                                      title="Move down"
+                                    >
+                                      ↓
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {/* Then show unselected children */}
+                            {state.children
+                              .filter(child => !selectedChildIds.includes(child.id))
+                              .map((child) => (
+                                <div 
+                                  key={child.id} 
+                                  className="rotation-order-item"
+                                  style={{ opacity: 0.6 }}
+                                >
+                                  <label style={{ display: 'flex', alignItems: 'center', flex: 1, cursor: 'pointer' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={false}
+                                      onChange={() => toggleChildSelection(child.id)}
+                                      style={{ marginRight: '8px' }}
+                                    />
+                                    <span className="rotation-order-name">{child.name}</span>
+                                  </label>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      ) : rotationMode === 'simultaneous' ? (
+                        // Simultaneous: Just checkboxes (no ordering needed)
+                        <div className="child-multi-select">
+                          <div className="assignment-actions">
+                            <button type="button" className="btn btn-ghost" onClick={handleToggleAllChildren}>
+                              {allChildrenSelected ? 'Deselect all' : 'Select all'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={handleClearChildren}
+                              disabled={selectedChildIds.length === 0}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          {state.children.map((child) => (
+                            <label key={child.id} className="checkbox-item">
+                              <input
+                                type="checkbox"
+                                checked={selectedChildIds.includes(child.id)}
+                                onChange={() => toggleChildSelection(child.id)}
+                              />
+                              {child.name}
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        // Single child: Just checkboxes (only one can be selected)
+                        <div className="child-multi-select">
+                          {state.children.map((child) => (
+                            <label key={child.id} className="checkbox-item">
+                              <input
+                                type="radio"
+                                name="single-child-selection"
+                                checked={selectedChildIds.includes(child.id)}
+                                onChange={() => {
+                                  if (!selectedChildIds.includes(child.id)) {
+                                    setSelectedChildIds([child.id]);
+                                  }
+                                }}
+                              />
+                              {child.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
               )}
             </fieldset>
 

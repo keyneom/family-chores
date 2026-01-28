@@ -77,10 +77,7 @@ export function getTheoreticalAssignment(
   }
 
   const rotation = task.rotation;
-  const assignedIds = rotation?.assignedChildIds || task.assignedChildIds || [];
   
-  if (assignedIds.length === 0) return [];
-
   // 2. Handle Linked Rotation (The Offset Logic)
   // Offset is a simple index offset in the rotation array, not a date offset
   if (rotation?.linkedTaskId && rotation.mode === 'round-robin') {
@@ -89,6 +86,7 @@ export function getTheoreticalAssignment(
       const offset = rotation.linkedTaskOffset || 0;
       
       // Get the linked task's rotation order (the source of truth for rotation sequence)
+      // When linked, we completely ignore this task's assignedChildIds/rotationOrder
       const linkedOrder = linkedTask.rotation?.rotationOrder || 
                          linkedTask.rotation?.assignedChildIds || 
                          linkedTask.assignedChildIds || [];
@@ -103,29 +101,29 @@ export function getTheoreticalAssignment(
         const linkedTaskTodayIndex = linkedOrder.indexOf(linkedTaskTodayChildId);
         
         if (linkedTaskTodayIndex === -1) {
-          // Linked task's today child not in rotation order - fallback
-          return assignedIds.length > 0 ? [{ childId: assignedIds[0], rotationIndex: 0 }] : [];
+          // Linked task's today child not in rotation order - fallback to first child
+          return [{ childId: linkedOrder[0], rotationIndex: 0 }];
         }
         
         // Apply offset: (todayIndex + offset) mod length
-        // Offset 0 = same child, offset 1 = next child, offset 2 = child after next, etc.
-        const targetIndex = (linkedTaskTodayIndex + offset) % linkedOrder.length;
+        // Offset 0 = same child, offset 1 = next child, offset -1 = previous child, etc.
+        // Handle negative offsets correctly by adding length before modulo
+        const targetIndex = ((linkedTaskTodayIndex + offset) % linkedOrder.length + linkedOrder.length) % linkedOrder.length;
         const targetChildId = linkedOrder[targetIndex];
         
-        // Ensure the child is eligible for this task
-        if (assignedIds.includes(targetChildId)) {
-          return [{ childId: targetChildId, rotationIndex: assignedIds.indexOf(targetChildId) }];
-        }
+        // Return the child from the linked task's order (no filtering needed - linked task controls everything)
+        return [{ childId: targetChildId, rotationIndex: targetIndex }];
       }
       
       // Fallback if we can't determine linked task's assignment
-      const fallbackChildId = linkedOrder.length > 0 && assignedIds.includes(linkedOrder[0])
-        ? linkedOrder[0]
-        : assignedIds[0];
-      
-      return fallbackChildId ? [{ childId: fallbackChildId, rotationIndex: assignedIds.indexOf(fallbackChildId) }] : [];
+      return linkedOrder.length > 0 ? [{ childId: linkedOrder[0], rotationIndex: 0 }] : [];
     }
   }
+
+  // For non-linked tasks, use this task's assigned children
+  const assignedIds = rotation?.assignedChildIds || task.assignedChildIds || [];
+  
+  if (assignedIds.length === 0) return [];
 
   // 3. Handle Standard Round-Robin
   if (rotation?.mode === 'round-robin') {
@@ -214,3 +212,5 @@ export function projectTaskInstancesForRange(
   
   return projected;
 }
+
+
