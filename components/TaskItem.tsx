@@ -12,6 +12,9 @@ import useTimerAnnouncements from "./hooks/useTimerAnnouncements";
 import type { Task, TimedCompletion, TaskInstance } from "../types/task";
 import { getTodayString } from "../utils/dateUtils";
 import { formatDateTimeCompact } from "../utils/dateUtils";
+import { buildTaskKey, parseTaskKey } from "../utils/taskKey";
+import { requiresPin, hasApprovers } from "../utils/approvalUtils";
+import { addExcludeDateToTask } from "../utils/scheduleUtils";
 
 // Renderable shape used by the UI (Task with metadata added by ChildColumn)
 interface RenderableTask extends Task {
@@ -30,7 +33,7 @@ interface TaskItemProps {
 
 function normalizeTask(task: TaskItemProps['task'], childId: number): RenderableTask {
   const today = getTodayString();
-  const taskKey = task.taskKey || `${childId}-${task.id}-${today}`;
+  const taskKey = task.taskKey || buildTaskKey(childId, task.id, today);
   
   return {
     ...task,
@@ -58,6 +61,14 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [editConfirmOpen, setEditConfirmOpen] = React.useState(false);
   const [alertOpen, setAlertOpen] = React.useState(false);
+  const [alertMessage, setAlertMessage] = React.useState<string | null>(null);
+  const [pendingDeleteAction, setPendingDeleteAction] = React.useState<{
+    option: DeleteOption;
+    taskId: string;
+    instanceId?: string;
+    instanceDate: string;
+    isProjected: boolean;
+  } | null>(null);
 
   // Use instance if provided, otherwise fall back to task metadata
   const actualInstance = instance || task.instance;
@@ -65,7 +76,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const today = getTodayString();
   // Construct taskKey consistently - use instance date if available, otherwise today
   const instanceDate = actualInstance?.date || today;
-  const taskKey = normalized.taskKey || `${childId}-${normalized.id}-${instanceDate}`;
+  const taskKey = normalized.taskKey || buildTaskKey(childId, String(normalized.id), instanceDate);
   const isCompleted = actualInstance ? actualInstance.completed : normalized.isCompleted;
   const { activeTimer, start, stop } = useTimer(taskKey, childId);
   
@@ -120,22 +131,14 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     
     // If not found, try matching by taskId and date (in case taskKey format differs slightly)
     if (!found && normalized.id) {
-      found = (state.timedCompletions || []).find(
-        (c) => {
-          // Parse taskKey to extract taskId and date
-          const parts = c.taskKey.split('-');
-          if (parts.length >= 5) {
-            // Format: childId-taskId-YYYY-MM-DD
-            const completionTaskId = parts.slice(1, -3).join('-');
-            const completionDate = parts.slice(-3).join('-');
-            return completionTaskId === normalized.id && 
-                   completionDate === instanceDate && 
-                   c.childId === childId && 
-                   !c.approved;
-          }
-          return false;
-        }
-      );
+      found = (state.timedCompletions || []).find((c) => {
+        const parsed = parseTaskKey(c.taskKey);
+        const completionChildId = parsed.childId ?? c.childId;
+        return parsed.taskId === normalized.id &&
+          parsed.date === instanceDate &&
+          completionChildId === childId &&
+          !c.approved;
+      });
     }
     
     return found;
@@ -168,13 +171,19 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     const isEarlyCompletion = instanceDate > today;
     
     // Check if approval is required - use earlyComplete for future tasks, taskComplete for today/past
-    const requiresApproval = isEarlyCompletion 
-      ? state.parentSettings.approvals.earlyComplete
-      : state.parentSettings.approvals.taskComplete;
-    const approvers = state.parentSettings.pins || [];
+    const requiresApproval = requiresPin({
+      action: isEarlyCompletion ? 'earlyComplete' : 'complete',
+      parentSettings: state.parentSettings,
+      task: normalized,
+    });
     
     if (requiresApproval) {
-      if (approvers.length === 0) {
+      if (!hasApprovers(state.parentSettings)) {
+        setAlertMessage(
+          isEarlyCompletion
+            ? "Early task completion requires parent approval, but no approvers are defined. Please add an approver in Settings first."
+            : "Task completion requires parent approval, but no approvers are defined. Please add an approver in Settings first."
+        );
         setAlertOpen(true);
         return;
       }
@@ -188,7 +197,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     performCompletion();
   };
 
-  const performCompletion = () => {
+  const performCompletion = (actorHandle?: string) => {
     if (actualInstance) {
       // Check if this is a projected instance (not yet in DB)
       const isProjected = actualInstance.id.startsWith('projected_') || actualInstance.id.startsWith('scheduled_');
@@ -213,6 +222,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             starReward: Number((realizedInstance.stars ?? normalized.stars) || 0),
             moneyReward: Number((realizedInstance.money ?? normalized.money) || 0),
           },
+          actorHandle,
         });
       } else {
         // Instance already exists in DB, just complete it
@@ -224,6 +234,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             starReward: Number((actualInstance.stars ?? normalized.stars) || 0),
             moneyReward: Number((actualInstance.money ?? normalized.money) || 0),
           },
+          actorHandle,
         });
       }
     } else if (taskKey) {
@@ -236,6 +247,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           starReward: Number(normalized.stars || 0),
           moneyReward: Number(normalized.money || 0),
         },
+        actorHandle,
       });
     }
   };
@@ -257,16 +269,23 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     setDeleteConfirmOpen(true);
   };
 
-  const confirmDelete = (option: DeleteOption) => {
+  const performDelete = (option: DeleteOption, actorHandle?: string) => {
     const taskIdToDelete = String(normalized.id);
     const instanceIdToDelete = actualInstance?.id;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayString();
+    const instanceDate = actualInstance?.date || today;
+    const isProjectedInstance = !!instanceIdToDelete && (instanceIdToDelete.startsWith('projected_') || instanceIdToDelete.startsWith('scheduled_'));
     
     switch (option) {
       case 'instance':
         // Delete just this instance
-        if (instanceIdToDelete) {
-          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete });
+        if (instanceIdToDelete && !isProjectedInstance) {
+          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete, actorHandle });
+        } else {
+          const updated = addExcludeDateToTask(normalized, instanceDate);
+          if (updated && updated.schedule) {
+            dispatch({ type: 'UPDATE_TASK', payload: updated, actorHandle });
+          }
         }
         break;
         
@@ -275,24 +294,56 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
         // We'll mark it as disabled after today
         dispatch({ 
           type: 'DISABLE_TASK_AFTER_DATE', 
-          payload: { taskId: taskIdToDelete, date: today } 
+          payload: { taskId: taskIdToDelete, date: instanceDate } ,
+          actorHandle,
         });
         // Also delete today's instance if it exists
         if (instanceIdToDelete) {
-          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete });
+          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete, actorHandle });
         }
         break;
         
       case 'template':
         // Delete the entire task template
-        dispatch({ type: 'DELETE_TASK', payload: taskIdToDelete });
+        dispatch({ type: 'DELETE_TASK', payload: taskIdToDelete, actorHandle });
         // Also delete the instance if it exists
         if (instanceIdToDelete) {
-          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete });
+          dispatch({ type: 'DELETE_TASK_INSTANCE', payload: instanceIdToDelete, actorHandle });
         }
         break;
     }
-    
+  };
+
+  const confirmDelete = (option: DeleteOption) => {
+    const approvalRequired = requiresPin({
+      action: 'deleteTasks',
+      parentSettings: state.parentSettings,
+      task: normalized,
+    });
+
+    if (approvalRequired) {
+      if (!hasApprovers(state.parentSettings)) {
+        setAlertMessage("Editing/deleting tasks requires parent approval, but no approvers are defined. Please add an approver in Settings first.");
+        setAlertOpen(true);
+        setDeleteConfirmOpen(false);
+        return;
+      }
+      const instanceDate = actualInstance?.date || getTodayString();
+      const instanceId = actualInstance?.id;
+      const isProjectedInstance = !!instanceId && (instanceId.startsWith('projected_') || instanceId.startsWith('scheduled_'));
+      setPendingDeleteAction({
+        option,
+        taskId: String(normalized.id),
+        instanceId,
+        instanceDate,
+        isProjected: isProjectedInstance,
+      });
+      setPinOpen(true);
+      setDeleteConfirmOpen(false);
+      return;
+    }
+
+    performDelete(option);
     setDeleteConfirmOpen(false);
   };
 
@@ -314,29 +365,37 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
 
   const onPinSuccess = (actorHandle?: string) => {
     setPinOpen(false);
-    
+
+    if (pendingDeleteAction) {
+      performDelete(pendingDeleteAction.option, actorHandle);
+      setPendingDeleteAction(null);
+      return;
+    }
+
     // Check if this is for a timed completion approval
     if (pendingCompletionActionId && pendingCompletionId) {
       dispatch({ type: 'APPROVE_TIMED_COMPLETION', payload: { completionId: pendingCompletionActionId, approve: true, applyMoney: applyMoneyOnApprove, actorHandle } });
       setPendingCompletionActionId(null);
     } else {
       // Regular task completion
-      performCompletion();
+      performCompletion(actorHandle);
     }
   };
 
-  const { emoji, title, color } = normalized;
+  const displayEmoji = actualInstance?.emojiOverride ?? normalized.emoji ?? '';
+  const displayTitle = actualInstance?.titleOverride ?? normalized.title;
+  const displayColor = actualInstance?.colorOverride ?? normalized.color ?? '#ccc';
   const stars = actualInstance?.stars ?? normalized.stars ?? 0;
   const money = actualInstance?.money ?? normalized.money ?? 0;
   const completed = isCompleted;
   const dueLabel = React.useMemo(() => {
-    const isoDate = actualInstance?.dueAt || actualInstance?.date;
+    const isoDate = actualInstance?.dueAtOverride || actualInstance?.dueAt || actualInstance?.date;
     if (!isoDate) return null;
     return formatDateTimeCompact(isoDate);
   }, [actualInstance]);
   const isOverdue = React.useMemo(() => {
     if (completed) return false;
-    const dueIso = actualInstance?.dueAt;
+    const dueIso = actualInstance?.dueAtOverride || actualInstance?.dueAt;
     if (!dueIso || !dueIso.includes('T')) return false;
     const due = new Date(dueIso);
     if (Number.isNaN(due.getTime())) return false;
@@ -346,15 +405,15 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   return (
     <div
       className={`task-item${completed ? " completed" : ""}`}
-      style={{ borderColor: color }}
+      style={{ borderColor: displayColor }}
       draggable={!completed}
       onDragStart={handleDragStart}
       data-task-id={normalized.id}
-      data-task-title={title}
+      data-task-title={displayTitle}
     >
       {!completed && <span className="drag-handle">⋮⋮</span>}
       <div className="task-info">
-        <span className="task-emoji">{emoji}</span>
+        <span className="task-emoji">{displayEmoji}</span>
         {activeTimer && (
           <div style={{ marginLeft: 8 }}>
             <TimedCountdown startedAt={activeTimer.startedAt} allowedSeconds={activeTimer.allowedSeconds} size={36} />
@@ -365,7 +424,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             className="task-header-row"
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}
           >
-            <div className="task-name">{title}</div>
+            <div className="task-name">{displayTitle}</div>
             {(dueLabel || isOverdue) && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: isOverdue ? '#e53e3e' : '#4a5568', fontSize: '0.9rem' }}>
                 {isOverdue && <span title="Overdue">⚠︎</span>}
@@ -412,10 +471,10 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
         <button
           className="btn-icon-text btn-edit"
           onClick={handleEdit}
-          title={`Edit task: ${title}`}
-          aria-label={`Edit task: ${title}`}
+          title={`Edit task: ${displayTitle}`}
+          aria-label={`Edit task: ${displayTitle}`}
           data-task-id={normalized.id}
-          data-task-title={title}
+          data-task-title={displayTitle}
         >
           <span className="btn-icon">✏️</span>
           <span className="btn-text">Edit</span>
@@ -430,19 +489,22 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
         </button>
         <PinModal 
           open={pinOpen} 
-          onClose={() => { setPinOpen(false); setPendingCompletionActionId(null); }} 
+          onClose={() => { setPinOpen(false); setPendingCompletionActionId(null); setPendingDeleteAction(null); }} 
           onSuccess={onPinSuccess} 
           message={
-            pendingCompletionActionId && pendingCompletionId
-              ? (applyMoneyOnApprove ? "Approve this timed completion?" : "Forgive money for this timed completion?")
-              : "Enter a parent PIN to complete this task."
+            pendingDeleteAction
+              ? "Enter a parent PIN to delete or disable this task."
+              : pendingCompletionActionId && pendingCompletionId
+                ? (applyMoneyOnApprove ? "Approve this timed completion?" : "Forgive money for this timed completion?")
+                : "Enter a parent PIN to complete this task."
           } 
         />
         <AlertModal
           open={alertOpen}
-          onClose={() => setAlertOpen(false)}
+          onClose={() => { setAlertOpen(false); setAlertMessage(null); }}
           title="Approval Required"
           message={
+            alertMessage ||
             (() => {
               const today = getTodayString();
               const instanceDate = actualInstance?.date || today;
@@ -458,14 +520,14 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           onClose={() => setEditConfirmOpen(false)}
           onConfirm={confirmEdit}
           task={normalized}
-          taskTitle={normalized.title}
+          taskTitle={displayTitle}
         />
         <DeleteTaskModal
           open={deleteConfirmOpen}
           onClose={() => setDeleteConfirmOpen(false)}
           onConfirm={confirmDelete}
           task={normalized}
-          taskTitle={normalized.title}
+          taskTitle={displayTitle}
         />
       </div>
     </div>

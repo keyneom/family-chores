@@ -7,6 +7,8 @@ import { useModalControl } from "./ModalControlContext";
 import { getTemplateForInstance, computeDueAt } from "../utils/taskInstanceGeneration";
 import { getTheoreticalAssignment } from "../utils/projectionUtils";
 import { getTodayString, getLocalDateString } from "../utils/dateUtils";
+import { buildTaskKey } from "../utils/taskKey";
+import { requiresPin, hasApprovers } from "../utils/approvalUtils";
 import AlertModal from "./modals/AlertModal";
 import ConfirmationModal from "./modals/ConfirmationModal";
 import WalletPayModal from "./modals/WalletPayModal";
@@ -35,6 +37,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   const [pendingEarlyCompletion, setPendingEarlyCompletion] = React.useState<{ task: Task; date: string } | null>(null);
   const [dragDropConfirmOpen, setDragDropConfirmOpen] = React.useState(false);
   const [pendingDragDrop, setPendingDragDrop] = React.useState<{ task: Task; instanceDate: string } | null>(null);
+  const [pendingDragDropActor, setPendingDragDropActor] = React.useState<string | undefined>(undefined);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [pendingDelete, setPendingDelete] = React.useState<{ task: Task; date: string } | null>(null);
   const [deleteApprovalAlertOpen, setDeleteApprovalAlertOpen] = React.useState(false);
@@ -73,11 +76,13 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       if (!task) return;
       
       // Check if approval is required for task move
-      const requiresApproval = state.parentSettings.approvals.taskMove;
-      const approvers = state.parentSettings.pins || [];
+      const requiresApproval = requiresPin({
+        action: 'taskMove',
+        parentSettings: state.parentSettings,
+      });
       
       if (requiresApproval) {
-        if (approvers.length === 0) {
+        if (!hasApprovers(state.parentSettings)) {
           setDragDropApprovalAlertOpen(true);
           return;
         }
@@ -102,12 +107,10 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     }
   };
 
-  const handleMoveInstance = (task: Task, instanceDate: string) => {
+  const handleMoveInstance = (task: Task, instanceDate: string, actorHandle?: string) => {
     // Find the instance for this date - ensure we only find instances for THIS specific task
     const dateStr = instanceDate.split('T')[0];
-    const existingInstance = (state.taskInstances || []).find(
-      inst => inst.templateId === task.id && inst.date === dateStr
-    );
+    const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
     
     if (existingInstance) {
       // Update ONLY this specific instance's childId
@@ -117,6 +120,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           ...existingInstance,
           childId: child.id,
         },
+        actorHandle,
       });
     } else {
       // Instance doesn't exist (it was theoretical). Realize it now with the NEW child assignment.
@@ -131,11 +135,11 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         money: task.money
       };
       
-      dispatch({ type: 'ADD_TASK_INSTANCE', payload: newInstance });
+      dispatch({ type: 'ADD_TASK_INSTANCE', payload: newInstance, actorHandle });
     }
   };
 
-  const handleRedoRotations = (task: Task) => {
+  const handleRedoRotations = (task: Task, actorHandle?: string) => {
     // CRITICAL: Only update THIS specific task, not all tasks
     // Update rotation start date to today, adjusted so the target child is at index 0
     const today = new Date();
@@ -166,6 +170,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           lastRotationIndex: rotationIndex,
         },
       },
+      actorHandle,
     });
     
     // No need to regenerate instances - the projection engine will pick up the new start date automatically
@@ -177,12 +182,13 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     const { task, instanceDate } = pendingDragDrop;
     
     if (option === 'instance') {
-      handleMoveInstance(task, instanceDate);
+      handleMoveInstance(task, instanceDate, pendingDragDropActor);
     } else if (option === 'redo-rotations') {
-      handleRedoRotations(task);
+      handleRedoRotations(task, pendingDragDropActor);
     }
     
     setPendingDragDrop(null);
+    setPendingDragDropActor(undefined);
   };
 
     const handlePayChild = () => {
@@ -208,6 +214,40 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     setMounted(true);
   }, []);
 
+  const instanceByTemplateDate = useMemo(() => {
+    const map = new Map<string, TaskInstance>();
+    (state.taskInstances || []).forEach((inst) => {
+      const key = `${inst.templateId}|${inst.date}`;
+      if (!map.has(key)) {
+        map.set(key, inst);
+      }
+    });
+    return map;
+  }, [state.taskInstances]);
+
+  const instanceByTemplateDateChild = useMemo(() => {
+    const map = new Map<string, TaskInstance>();
+    (state.taskInstances || []).forEach((inst) => {
+      const key = `${inst.templateId}|${inst.childId}|${inst.date}`;
+      if (!map.has(key)) {
+        map.set(key, inst);
+      }
+    });
+    return map;
+  }, [state.taskInstances]);
+
+  const pendingCompletionByTaskKey = useMemo(() => {
+    const map = new Map<string, TimedCompletion>();
+    (state.timedCompletions || []).forEach((completion) => {
+      if (completion.approved) return;
+      const key = `${completion.taskKey}|${completion.childId}`;
+      if (!map.has(key)) {
+        map.set(key, completion);
+      }
+    });
+    return map;
+  }, [state.timedCompletions]);
+
   // --- Task Projection Logic ---
   
   // 1. Get Realized (DB) instances for today
@@ -226,9 +266,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     state.tasks.forEach(task => {
         if (!task.enabled) return;
         // Check if a realized instance exists for this task on this date (ANY child)
-        const existingInstance = (state.taskInstances || []).find(
-            inst => inst.templateId === task.id && inst.date === today
-        );
+        const existingInstance = instanceByTemplateDate.get(`${task.id}|${today}`);
         
         // If realized instance exists, the "wave has collapsed" - do not project
         if (existingInstance) return;
@@ -258,7 +296,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
             projected.push({
                 ...task,
                 instance,
-                taskKey: `${child.id}-${task.id}-${today}`,
+                taskKey: buildTaskKey(child.id, task.id, today),
                 isCompleted: false
             });
         }
@@ -284,11 +322,9 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         if (!template) return; // Skip if template not found
         
         // Build taskKey for backward compatibility with timers/completions
-        const taskKey = `${instance.childId}-${instance.templateId}-${instance.date}`;
+        const taskKey = buildTaskKey(instance.childId, instance.templateId, instance.date);
         const isCompleted = instance.completed;
-        const pending = (state.timedCompletions || []).find(
-          (c) => c.taskKey === taskKey && c.childId === instance.childId && !c.approved
-        );
+        const pending = pendingCompletionByTaskKey.get(`${taskKey}|${instance.childId}`);
         
         results.push({
           ...template,
@@ -300,7 +336,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         });
       });
       return results;
-  }, [dbInstancesToday, state.tasks, state.timedCompletions]);
+  }, [dbInstancesToday, state.tasks, pendingCompletionByTaskKey]);
 
   // Merge Realized + Projected
   // Realized takes precedence (already filtered out of projected if exists)
@@ -359,9 +395,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
             if (!task.enabled) return;
             
             // Check for REALIZED instance first (e.g. rescheduled to future)
-            const existingInstance = (state.taskInstances || []).find(
-                inst => inst.templateId === task.id && inst.date === dateStr
-            );
+            const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
             
             if (existingInstance) {
                 // If it exists and assigned to THIS child, show it
@@ -420,9 +454,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       
       state.tasks.forEach(task => {
         if (!task.enabled) return;
-        const existingInstance = (state.taskInstances || []).find(
-          inst => inst.templateId === task.id && inst.date === dateStr
-        );
+        const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
         
         if (existingInstance) {
           if (existingInstance.childId === child.id) count++;
@@ -496,13 +528,11 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   );
 
 
-  const performEarlyCompletion = (task: Task, date: string) => {
+  const performEarlyCompletion = (task: Task, date: string, actorHandle?: string) => {
     const dateStr = date.split('T')[0];
     
     // Check if instance already exists
-    const existingInstance = (state.taskInstances || []).find(
-      inst => inst.templateId === task.id && inst.childId === child.id && inst.date === dateStr
-    );
+    const existingInstance = instanceByTemplateDateChild.get(`${task.id}|${child.id}|${dateStr}`);
     
     if (existingInstance) {
       // Complete existing instance
@@ -515,6 +545,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
             starReward: Number(existingInstance.stars ?? task.stars ?? 0),
             moneyReward: Number(existingInstance.money ?? task.money ?? 0),
           },
+          actorHandle,
         });
       }
     } else {
@@ -540,15 +571,16 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           starReward: Number(task.stars ?? 0),
           moneyReward: Number(task.money ?? 0),
         },
+        actorHandle,
       });
     }
   };
 
 
-  const handlePinSuccess = () => {
+  const handlePinSuccess = (actorHandle?: string) => {
     setPinOpen(false);
     if (pendingEarlyCompletion) {
-      performEarlyCompletion(pendingEarlyCompletion.task, pendingEarlyCompletion.date);
+      performEarlyCompletion(pendingEarlyCompletion.task, pendingEarlyCompletion.date, actorHandle);
       setPendingEarlyCompletion(null);
     } else if (pendingDragDrop) {
       // Approval granted for drag-and-drop, proceed with move
@@ -556,10 +588,11 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       // Check if task has rotation
       if (task.rotation?.mode === 'round-robin') {
         // Show confirmation modal for rotating tasks
+        setPendingDragDropActor(actorHandle);
         setDragDropConfirmOpen(true);
       } else {
         // For non-rotating tasks, move just this instance
-        handleMoveInstance(task, instanceDate);
+        handleMoveInstance(task, instanceDate, actorHandle);
         setPendingDragDrop(null);
       }
     } else if (pendingDelete && pendingDeleteOption) {
@@ -567,13 +600,13 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       const { task, date } = pendingDelete;
       const dateStr = date.split('T')[0];
       if (pendingDeleteOption === 'template') {
-        dispatch({ type: 'DELETE_TASK', payload: task.id });
+        dispatch({ type: 'DELETE_TASK', payload: task.id, actorHandle });
       } else if (pendingDeleteOption === 'future') {
         // Disable task after the selected date (remove all future occurrences)
-        dispatch({ type: 'DISABLE_TASK_AFTER_DATE', payload: { taskId: task.id, date: dateStr } });
+        dispatch({ type: 'DISABLE_TASK_AFTER_DATE', payload: { taskId: task.id, date: dateStr }, actorHandle });
       } else {
         // 'instance' on a future occurrence is not supported yet; fall back to future
-        dispatch({ type: 'DISABLE_TASK_AFTER_DATE', payload: { taskId: task.id, date: dateStr } });
+        dispatch({ type: 'DISABLE_TASK_AFTER_DATE', payload: { taskId: task.id, date: dateStr }, actorHandle });
       }
       setPendingDelete(null);
       setPendingDeleteOption(null);
@@ -674,9 +707,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
                 // We need to fetch the instance again or construct it to ensure TaskItem props are correct.
                 
                 // Re-check for realized instance
-                const existingInstance = (state.taskInstances || []).find(
-                  inst => inst.templateId === task.id && inst.childId === child.id && inst.date === date
-                );
+                const existingInstance = instanceByTemplateDateChild.get(`${task.id}|${child.id}|${date}`);
                 
                 const derivedInstance: TaskInstance = existingInstance || {
                   id: `scheduled_${task.id}_${child.id}_${date}`,
@@ -693,7 +724,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
                 const taskWithInstance: Task & { instance: TaskInstance; taskKey: string; isCompleted: boolean } = {
                   ...task,
                   instance: derivedInstance,
-                  taskKey: `${derivedInstance.childId}-${derivedInstance.templateId}-${derivedInstance.date}`,
+                  taskKey: buildTaskKey(derivedInstance.childId, derivedInstance.templateId, derivedInstance.date),
                   isCompleted: derivedInstance.completed || false,
                 };
                 
@@ -748,7 +779,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       />
       <PinModal
         open={pinOpen}
-        onClose={() => { setPinOpen(false); setPendingEarlyCompletion(null); setPendingDragDrop(null); setPendingDelete(null); setPendingDeleteOption(null); }}
+        onClose={() => { setPinOpen(false); setPendingEarlyCompletion(null); setPendingDragDrop(null); setPendingDragDropActor(undefined); setPendingDelete(null); setPendingDeleteOption(null); }}
         onSuccess={handlePinSuccess}
         message={
           pendingEarlyCompletion
@@ -779,10 +810,9 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           setDeleteConfirmOpen(false);
           if (!pendingDelete) return;
           // Require approval for edits/deletes if enabled
-          const approvalRequired = !!state.parentSettings?.approvals?.editTasks;
-          const approvers = state.parentSettings?.pins || [];
+          const approvalRequired = requiresPin({ action: 'deleteTasks', parentSettings: state.parentSettings });
           if (approvalRequired) {
-            if (approvers.length === 0) {
+            if (!hasApprovers(state.parentSettings)) {
               setDeleteApprovalAlertOpen(true);
               return;
             }
@@ -819,7 +849,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       />
       <DragDropConfirmModal
         open={dragDropConfirmOpen}
-        onClose={() => { setDragDropConfirmOpen(false); setPendingDragDrop(null); }}
+        onClose={() => { setDragDropConfirmOpen(false); setPendingDragDrop(null); setPendingDragDropActor(undefined); }}
         onConfirm={handleDragDropConfirm}
         task={pendingDragDrop?.task || null}
         targetChildName={child.name}

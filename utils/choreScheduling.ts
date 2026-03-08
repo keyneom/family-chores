@@ -1,15 +1,16 @@
 import { Task } from '@/types/task';
 import { doesScheduleRunOnDate, describeSchedule } from './recurrenceBuilder';
+import { getLocalDateString, parseLocalDate } from './dateUtils';
 
 export function shouldTaskRunToday(task: Task, date?: string): boolean {
   if (task.schedule) {
-    return doesScheduleRunOnDate(task.schedule, date ?? new Date().toISOString().split('T')[0]);
+    return doesScheduleRunOnDate(task.schedule, date ?? getLocalDateString());
   }
 
   // Only check recurring tasks
   if (!task.recurring) return false;
   
-  const targetDate = date ? new Date(date) : new Date();
+  const targetDate = date ? parseLocalDate(date) : new Date();
   const dayOfWeek = targetDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
   const cadence = task.recurring.cadence || 'daily';
   

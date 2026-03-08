@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { useChoresApp, Child } from "./ChoresAppContext";
 import { getNextExecutionDateTimes } from "../utils/recurrenceBuilder";
+import { getLocalDateString } from "../utils/dateUtils";
 import { assignTaskToChild } from "../utils/taskAssignment";
 import type Task from "../types/task";
 
@@ -76,11 +77,11 @@ const UpcomingTasksPanel: React.FC<UpcomingTasksPanelProps> = ({
 }) => {
   const { state } = useChoresApp();
   const [mounted, setMounted] = useState(false);
-  const [today, setToday] = useState(() => new Date().toISOString().split("T")[0]);
+  const [today, setToday] = useState(() => getLocalDateString());
 
   useEffect(() => {
     setMounted(true);
-    setToday(new Date().toISOString().split("T")[0]);
+    setToday(getLocalDateString());
   }, []);
 
   const upcoming = useMemo(() => {
@@ -133,4 +134,3 @@ const UpcomingTasksPanel: React.FC<UpcomingTasksPanelProps> = ({
 };
 
 export default UpcomingTasksPanel;
-

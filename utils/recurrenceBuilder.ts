@@ -1,4 +1,5 @@
 import { ScheduleDefinition, RecurrenceRule, Weekday } from '@/types/task';
+import { getLocalDateString, getLocalDateTimeString, parseLocalDate } from './dateUtils';
 
 interface CronField {
   any?: boolean;
@@ -22,7 +23,7 @@ export function doesScheduleRunOnDate(schedule: ScheduleDefinition, date: string
   if (schedule.cronExpression) {
     const cron = parseCronExpression(schedule.cronExpression);
     const targetDate = new Date(`${date}T00:00:00`);
-    return cronMatchesDate(cron, targetDate);
+    return cronMatchesDateIgnoringTime(cron, targetDate);
   }
 
   if (schedule.rule) {
@@ -39,7 +40,7 @@ export function getNextOccurrences(schedule: ScheduleDefinition, startDate: stri
   const maxAttempts = 365; // safeguard
 
   while (occurrences.length < count && attempts < maxAttempts) {
-    const dateStr = cursor.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(cursor);
     if (doesScheduleRunOnDate(schedule, dateStr)) {
       occurrences.push(dateStr);
     }
@@ -82,7 +83,10 @@ export function buildCronExpressionFromRule(rule: RecurrenceRule): string | unde
 
 export function describeSchedule(schedule: ScheduleDefinition): string {
   if (schedule.description) return schedule.description;
-  if (schedule.cronExpression) return `Cron: ${schedule.cronExpression}`;
+  if (schedule.cronExpression) {
+    const derived = describeCronExpression(schedule.cronExpression, schedule.timezone);
+    return derived || `Cron: ${schedule.cronExpression}`;
+  }
   if (!schedule.rule) return 'No schedule';
 
   const { frequency, interval, byWeekday, byMonthday } = schedule.rule;
@@ -128,6 +132,51 @@ function formatTimeLabel(time?: string): string | null {
     return Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(sample);
   }
   return `${hourStr.padStart(2, '0')}:${minuteStr.padStart(2, '0')}`;
+}
+
+export function deriveDueTimeFromCron(expr: string): string | undefined {
+  const parts = parseCronExpression(expr);
+  const minute = getSingleCronValue(parts.minute);
+  const hour = getSingleCronValue(parts.hour);
+  if (hour === null || minute === null) return undefined;
+  const safeHour = Math.min(23, Math.max(0, hour));
+  const safeMinute = Math.min(59, Math.max(0, minute));
+  return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
+}
+
+function describeCronExpression(expr: string, timezone?: string): string | null {
+  try {
+    const parts = parseCronExpression(expr);
+    const minute = getSingleCronValue(parts.minute);
+    const hour = getSingleCronValue(parts.hour);
+    const timeLabel = (hour !== null && minute !== null)
+      ? formatTimeLabel(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
+      : null;
+    const tzSuffix = timezone ? ` (${timezone})` : '';
+
+    const dom = parts.dayOfMonth;
+    const dow = parts.dayOfWeek;
+    const month = parts.month;
+
+    const domAny = dom.any || !dom.values || dom.values.length === 0;
+    const dowAny = dow.any || !dow.values || dow.values.length === 0;
+    const monthAny = month.any || !month.values || month.values.length === 0;
+
+    if (domAny && dowAny && monthAny && timeLabel) {
+      return `Every day at ${timeLabel}${tzSuffix}`;
+    }
+    if (dow.values && dow.values.length > 0 && monthAny && timeLabel) {
+      const names = dow.values.map((d) => WEEKDAY_NAMES[d % 7]).join(', ');
+      return `Every week on ${names} at ${timeLabel}${tzSuffix}`;
+    }
+    if (dom.values && dom.values.length > 0 && monthAny && timeLabel) {
+      const days = dom.values.join(', ');
+      return `Every month on day(s) ${days} at ${timeLabel}${tzSuffix}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function ruleMatchesDate(rule: RecurrenceRule, date: string): boolean {
@@ -226,14 +275,20 @@ function diffInMonths(start: Date, end: Date): number {
 }
 
 function combineDateAndTime(date: string, time?: string): string {
-  const base = new Date(`${date}T00:00:00`);
-  if (!time) return base.toISOString();
+  const datePart = date.includes('T') ? date.split('T')[0] : date;
+  const base = parseLocalDate(datePart);
+  if (!time) return getLocalDateTimeString(base);
   const [hourStr, minuteStr = '0', secondStr = '0'] = time.split(':');
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
   const second = parseInt(secondStr, 10);
-  base.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, Number.isFinite(second) ? second : 0, 0);
-  return base.toISOString();
+  base.setHours(
+    Number.isFinite(hour) ? hour : 0,
+    Number.isFinite(minute) ? minute : 0,
+    Number.isFinite(second) ? second : 0,
+    0
+  );
+  return getLocalDateTimeString(base);
 }
 
 function parseCronExpression(expr: string): CronParts {
@@ -260,9 +315,7 @@ function parseCronField(token: string): CronField {
   return { values };
 }
 
-function cronMatchesDate(parts: CronParts, date: Date): boolean {
-  const minuteMatch = fieldMatches(parts.minute, date.getMinutes());
-  const hourMatch = fieldMatches(parts.hour, date.getHours());
+function cronMatchesDateIgnoringTime(parts: CronParts, date: Date): boolean {
   const domMatch = fieldMatches(parts.dayOfMonth, date.getDate());
   const monthMatch = fieldMatches(parts.month, date.getMonth() + 1);
   const dowMatch = fieldMatches(parts.dayOfWeek, date.getDay());
@@ -275,7 +328,7 @@ function cronMatchesDate(parts: CronParts, date: Date): boolean {
         ? domMatch
         : (domMatch || dowMatch);
 
-  return minuteMatch && hourMatch && monthMatch && dayMatches;
+  return monthMatch && dayMatches;
 }
 
 function fieldMatches(field: CronField, value: number): boolean {
@@ -290,4 +343,9 @@ function fieldMatches(field: CronField, value: number): boolean {
   return true;
 }
 
-
+function getSingleCronValue(field: CronField): number | null {
+  if (field.any) return null;
+  if (typeof field.step === 'number') return null;
+  if (field.values && field.values.length === 1) return field.values[0];
+  return null;
+}

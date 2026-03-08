@@ -126,6 +126,7 @@ export default function SettingsModal({ open, onClose, onCreateTask, onEditTask,
             money: 0,
             blockchainAddress: newChildBlockchain || undefined,
           },
+          actorHandle,
         });
         setNewChildName("");
         setNewChildBlockchain("");

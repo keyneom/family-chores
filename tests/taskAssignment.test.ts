@@ -15,6 +15,7 @@ describe('taskAssignment', () => {
       title: 'Test Task',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'single-child',
         assignedChildIds: [1],
@@ -33,6 +34,7 @@ describe('taskAssignment', () => {
       title: 'Test Task',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'simultaneous',
         assignedChildIds: [1, 2, 3],
@@ -51,6 +53,7 @@ describe('taskAssignment', () => {
       title: 'Test Task',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'round-robin',
         assignedChildIds: [1, 2],
@@ -80,6 +83,7 @@ describe('taskAssignment', () => {
       title: 'Test Task',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'single-child',
         assignedChildIds: [999], // Non-existent child
@@ -91,16 +95,17 @@ describe('taskAssignment', () => {
     expect(assignments).toHaveLength(0);
   });
 
-  it('falls back to all children when no assignment specified', () => {
+  it('returns empty when no assignment specified', () => {
     const task: Task = {
       id: 'task_5',
       title: 'Test Task',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
     };
 
     const assignments = assignTaskToChild(task, children, { date: '2024-01-01' }, [task]);
-    expect(assignments.length).toBeGreaterThan(0);
+    expect(assignments).toHaveLength(0);
   });
 
   it('supports linked rotation offsets without cycles', () => {
@@ -109,6 +114,7 @@ describe('taskAssignment', () => {
       title: 'Source',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'round-robin',
         assignedChildIds: [1, 2, 3],
@@ -122,6 +128,7 @@ describe('taskAssignment', () => {
       title: 'Offset follower',
       createdAt: new Date().toISOString(),
       type: 'recurring',
+      recurring: { cadence: 'daily' },
       rotation: {
         mode: 'round-robin',
         assignedChildIds: [1, 2, 3],
@@ -138,8 +145,6 @@ describe('taskAssignment', () => {
     expect(day2[0].child.id).toBe(3); // source day2 child 2, offset +1 => child 3
   });
 });
-
-
 
 
 

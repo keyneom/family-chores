@@ -7,7 +7,6 @@ export const ModalControlContext = React.createContext<{
   openAddChildModal: () => void;
   openAddChoreModal: () => void;
   openEditChoreModal: (choreId: number) => void;
-  openOneOffTaskModal: (childId: number) => void;
 } | undefined>(undefined);
 
 export function useModalControl() {

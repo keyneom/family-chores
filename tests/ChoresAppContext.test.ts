@@ -1,5 +1,5 @@
 import { choresAppReducer, ChoresAppState, Chore, Child } from '../components/ChoresAppContext';
-import type Task from '../types/task';
+import type Task, { TaskInstance } from '../types/task';
 
 describe('ChoresAppContext Reducer', () => {
   const createInitialState = (): ChoresAppState => ({
@@ -260,6 +260,85 @@ describe('ChoresAppContext Reducer', () => {
     });
   });
 
+  describe('Task instance overrides', () => {
+    it('snapshots template display fields on instance completion', () => {
+      const initialState = createInitialState();
+      const task: Task = {
+        id: 'task_1',
+        title: 'Template Title',
+        emoji: '🧹',
+        color: '#123456',
+        createdAt: new Date().toISOString(),
+        type: 'recurring',
+        enabled: true,
+        stars: 1,
+        money: 1,
+        recurring: { cadence: 'daily' },
+      };
+      const instance: TaskInstance = {
+        id: 'inst_1',
+        templateId: 'task_1',
+        childId: 1,
+        date: '2026-01-30',
+        dueAt: '2026-01-30T17:00',
+        completed: false,
+        createdAt: new Date().toISOString(),
+      };
+      initialState.tasks = [task];
+      initialState.taskInstances = [instance];
+
+      const newState = choresAppReducer(initialState, {
+        type: 'COMPLETE_TASK_INSTANCE',
+        payload: {
+          instanceId: 'inst_1',
+          childId: 1,
+          starReward: 1,
+          moneyReward: 1,
+        },
+      });
+
+      const updated = newState.taskInstances.find(inst => inst.id === 'inst_1');
+      expect(updated?.completed).toBe(true);
+      expect(updated?.titleOverride).toBe('Template Title');
+      expect(updated?.emojiOverride).toBe('🧹');
+      expect(updated?.colorOverride).toBe('#123456');
+      expect(updated?.dueAtOverride).toBe('2026-01-30T17:00');
+    });
+
+    it('updates instance overrides without mutating template', () => {
+      const initialState = createInitialState();
+      const task: Task = {
+        id: 'task_1',
+        title: 'Template Title',
+        createdAt: new Date().toISOString(),
+        type: 'recurring',
+        enabled: true,
+        stars: 1,
+        money: 1,
+        recurring: { cadence: 'daily' },
+      };
+      const instance: TaskInstance = {
+        id: 'inst_1',
+        templateId: 'task_1',
+        childId: 1,
+        date: '2026-01-30',
+        completed: false,
+        createdAt: new Date().toISOString(),
+      };
+      initialState.tasks = [task];
+      initialState.taskInstances = [instance];
+
+      const newState = choresAppReducer(initialState, {
+        type: 'UPDATE_TASK_INSTANCE',
+        payload: { ...instance, titleOverride: 'Instance Title' },
+      });
+
+      expect(newState.tasks[0].title).toBe('Template Title');
+      const updated = newState.taskInstances.find(inst => inst.id === 'inst_1');
+      expect(updated?.titleOverride).toBe('Instance Title');
+    });
+  });
+
   describe('ADD_CHILD', () => {
     it('should add a new child', () => {
       const initialState = createInitialState();
@@ -357,5 +436,3 @@ describe('ChoresAppContext Reducer', () => {
     });
   });
 });
-
-

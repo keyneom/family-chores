@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useChoresApp, type Timer } from "../ChoresAppContext";
+import { parseTaskKey } from "../../utils/taskKey";
 
 export interface ActiveTimer {
   id: string;
@@ -45,22 +46,11 @@ export function useTimer(taskKey?: string, childId?: number): UseTimerReturn {
     // taskKey format: childId-taskId-date (date is YYYY-MM-DD, so last 3 parts) or legacy childId:choreId
     let allowedSeconds = 300; // default fallback
     
-    // Try to parse taskKey to get taskId
-    if (taskKey.includes(':')) {
-      // Legacy format: childId:choreId - can't easily map to new task format
-      // Use default
-    } else {
-      const parts = taskKey.split('-');
-      if (parts.length >= 2) {
-        // New format: childId-taskId-date (date is YYYY-MM-DD, so last 3 parts)
-        // Extract taskId: everything between childId (first part) and date (last 3 parts)
-        const taskId = parts.length >= 5 
-          ? parts.slice(1, -3).join('-') // Has date: remove childId (first) and date (last 3)
-          : parts.slice(1).join('-'); // No date: just remove childId
-        const task = state.tasks.find(t => t.id === taskId);
-        if (task?.timed?.allowedSeconds) {
-          allowedSeconds = task.timed.allowedSeconds;
-        }
+    const parsed = parseTaskKey(taskKey);
+    if (parsed.taskId) {
+      const task = state.tasks.find(t => t.id === parsed.taskId);
+      if (task?.timed?.allowedSeconds) {
+        allowedSeconds = task.timed.allowedSeconds;
       }
     }
     

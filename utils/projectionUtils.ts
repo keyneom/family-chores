@@ -36,6 +36,9 @@ export function getTheoreticalAssignment(
   allTasks: Task[],
   depth = 0
 ): ProjectedAssignment[] {
+  if (task.disabledAfter && dateStr > task.disabledAfter) {
+    return [];
+  }
   // Guard against infinite recursion (cycles)
   if (depth > MAX_LINK_DEPTH) {
     console.warn(`Max recursion depth reached for task ${task.id} on ${dateStr}`);
@@ -212,5 +215,4 @@ export function projectTaskInstancesForRange(
   
   return projected;
 }
-
 

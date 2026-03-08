@@ -4,6 +4,7 @@ import {
   getNextExecutionDateTimes,
   buildCronExpressionFromRule,
   getNextOccurrences,
+  deriveDueTimeFromCron,
 } from '../utils/recurrenceBuilder';
 import type { ScheduleDefinition, RecurrenceRule } from '../types/task';
 
@@ -81,5 +82,16 @@ describe('recurrenceBuilder utilities', () => {
     const cron = buildCronExpressionFromRule(monthlyRule);
     expect(cron).toBe('0 12 15 */1 *');
   });
-});
 
+  it('matches cron schedules by date regardless of time', () => {
+    const schedule: ScheduleDefinition = {
+      cronExpression: '0 17 * * *',
+    };
+    expect(doesScheduleRunOnDate(schedule, '2024-01-02')).toBe(true);
+  });
+
+  it('derives dueTime from simple cron expressions', () => {
+    expect(deriveDueTimeFromCron('0 17 * * *')).toBe('17:00');
+    expect(deriveDueTimeFromCron('30 6 * * *')).toBe('06:30');
+  });
+});

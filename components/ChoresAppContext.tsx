@@ -13,6 +13,9 @@ import Task, {
   Weekday,
 } from "../types/task";
 import ActionLogEntry from "../types/actionLog";
+import { parseTaskKey } from "../utils/taskKey";
+import { deriveDueTimeFromCron } from "../utils/recurrenceBuilder";
+import { getLocalDateTimeString } from "../utils/dateUtils";
 
 // Legacy shapes used when reading old saved state
 interface LegacyChore {
@@ -204,18 +207,19 @@ export interface TimedCompletion {
 }
 
 type ChoresAppAction =
-  | { type: "ADD_CHILD"; payload: Child }
-  | { type: "DELETE_CHILD"; payload: number }
-  | { type: "ADD_TASK"; payload: Task }
-  | { type: "UPDATE_TASK"; payload: Task }
-  | { type: "DELETE_TASK"; payload: string } // template id
-  | { type: "DISABLE_TASK_AFTER_DATE"; payload: { taskId: string; date: string } } // disable task after this date (ISO date string)
-  | { type: "ADD_TASK_INSTANCE"; payload: TaskInstance }
+  | { type: "ADD_CHILD"; payload: Child; actorHandle?: string | null }
+  | { type: "DELETE_CHILD"; payload: number; actorHandle?: string | null }
+  | { type: "UPDATE_CHILD"; payload: Child; actorHandle?: string | null }
+  | { type: "ADD_TASK"; payload: Task; actorHandle?: string | null }
+  | { type: "UPDATE_TASK"; payload: Task; actorHandle?: string | null }
+  | { type: "DELETE_TASK"; payload: string; actorHandle?: string | null } // template id
+  | { type: "DISABLE_TASK_AFTER_DATE"; payload: { taskId: string; date: string }; actorHandle?: string | null } // disable task after this date (ISO date string)
+  | { type: "ADD_TASK_INSTANCE"; payload: TaskInstance; actorHandle?: string | null }
   | { type: "REPLACE_TASK_INSTANCES"; payload: { taskId: string; startDate?: string; instances: TaskInstance[]; preserveCompleted?: boolean } }
-  | { type: "UPDATE_TASK_INSTANCE"; payload: TaskInstance }
-  | { type: "DELETE_TASK_INSTANCE"; payload: string } // instance id
-  | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number } } // Legacy
-  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number } }
+  | { type: "UPDATE_TASK_INSTANCE"; payload: TaskInstance; actorHandle?: string | null }
+  | { type: "DELETE_TASK_INSTANCE"; payload: string; actorHandle?: string | null } // instance id
+  | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number }; actorHandle?: string | null } // Legacy
+  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number }; actorHandle?: string | null }
   | { type: "PAY_CHILD"; payload: number }
   | { type: "START_TIMER"; payload: { timer: Timer } }
   | { type: "STOP_TIMER"; payload: { timerId: string; stoppedAt: string } }
@@ -246,6 +250,24 @@ const defaultState: ChoresAppState = {
   actionLog: [],
 };
 
+const MAX_TASK_INSTANCES = 2000;
+const MAX_TIMED_COMPLETIONS = 500;
+const MAX_ACTION_LOG = 1000;
+
+function pruneArray<T>(items: T[] | undefined, max: number): T[] {
+  if (!items || items.length <= max) return items || [];
+  return items.slice(items.length - max);
+}
+
+export function pruneState(state: ChoresAppState): ChoresAppState {
+  return {
+    ...state,
+    taskInstances: pruneArray(state.taskInstances, MAX_TASK_INSTANCES),
+    timedCompletions: pruneArray(state.timedCompletions, MAX_TIMED_COMPLETIONS),
+    actionLog: pruneArray(state.actionLog, MAX_ACTION_LOG),
+  };
+}
+
 function sanitizeChildIds(input?: (number | string)[] | null): number[] | undefined {
   if (!Array.isArray(input)) return undefined;
   const numeric = input
@@ -264,6 +286,36 @@ function getDefaultTimezone(): string | undefined {
     return tz || undefined;
   }
   return undefined;
+}
+
+function normalizeLocalDateTimeString(value?: string): string | undefined {
+  if (!value || typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  // Convert UTC or offset timestamps to local date-time string
+  if (/Z$/i.test(trimmed) || /[+-]\d{2}:\d{2}$/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return getLocalDateTimeString(parsed);
+    }
+  }
+  if (trimmed.includes("T")) {
+    const [datePart, timePartRaw] = trimmed.split("T");
+    if (!timePartRaw) return trimmed;
+    const [hh = "00", mm = "00"] = timePartRaw.split(":");
+    return `${datePart}T${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
+  }
+  return trimmed;
+}
+
+function normalizeInstanceDates(instance: TaskInstance): TaskInstance {
+  const normalizedDueAt = normalizeLocalDateTimeString(instance.dueAt);
+  const normalizedDueAtOverride = normalizeLocalDateTimeString(instance.dueAtOverride);
+  return {
+    ...instance,
+    ...(normalizedDueAt ? { dueAt: normalizedDueAt } : {}),
+    ...(normalizedDueAtOverride ? { dueAtOverride: normalizedDueAtOverride } : {}),
+  };
 }
 
 function normalizeRecurrenceRule(rule: RecurrenceRule, task: Task): RecurrenceRule {
@@ -336,12 +388,16 @@ function normalizeScheduleDefinition(task: Task): ScheduleDefinition | undefined
   if (!baseSchedule) return undefined;
   const timezone = baseSchedule.timezone || task.schedule?.timezone || getDefaultTimezone();
   const rule = baseSchedule.rule ? normalizeRecurrenceRule(baseSchedule.rule, task) : undefined;
+  const cronDueTime =
+    baseSchedule.cronExpression && !baseSchedule.dueTime
+      ? deriveDueTimeFromCron(baseSchedule.cronExpression)
+      : undefined;
 
   return {
     ...baseSchedule,
     rule,
     timezone,
-    dueTime: baseSchedule.dueTime || task.recurring?.timeOfDay,
+    dueTime: baseSchedule.dueTime || cronDueTime || task.recurring?.timeOfDay,
     excludeDates: baseSchedule.excludeDates ? Array.from(new Set(baseSchedule.excludeDates)) : undefined,
     includeDates: baseSchedule.includeDates ? Array.from(new Set(baseSchedule.includeDates)) : undefined,
   };
@@ -431,6 +487,10 @@ function normalizeTaskPayload(task: Task): Task {
   const assignment = buildAssignmentSettings(task, assignedChildIds);
   const rotation = buildRotationSettings(task, assignedChildIds, assignment);
   const schedule = normalizeScheduleDefinition(task);
+  const normalizedDueDate = normalizeLocalDateTimeString(task.oneOff?.dueDate);
+  const oneOff = task.oneOff
+    ? { ...task.oneOff, ...(normalizedDueDate ? { dueDate: normalizedDueDate } : {}) }
+    : undefined;
 
   return {
     ...task,
@@ -438,6 +498,7 @@ function normalizeTaskPayload(task: Task): Task {
     assignment,
     rotation,
     schedule,
+    ...(oneOff ? { oneOff } : {}),
   };
 }
 
@@ -461,7 +522,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
           ...state.parentSettings,
           childDisplayOrder: [...(state.parentSettings.childDisplayOrder || []), action.payload.id],
         },
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_CHILD', { child: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_CHILD', { child: action.payload }, action.actorHandle ?? null) ],
       };
     case "DELETE_CHILD":
       return {
@@ -471,7 +532,13 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
           ...state.parentSettings,
           childDisplayOrder: (state.parentSettings.childDisplayOrder || []).filter(id => id !== action.payload),
         },
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_CHILD', { childId: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_CHILD', { childId: action.payload }, action.actorHandle ?? null) ],
+      };
+    case "UPDATE_CHILD":
+      return {
+        ...state,
+        children: state.children.map(child => child.id === action.payload.id ? { ...child, ...action.payload } : child),
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_CHILD', { child: action.payload }, action.actorHandle ?? null) ],
       };
     case "COMPLETE_TASK":
       return {
@@ -489,7 +556,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
               }
             : child
         ),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK', action.payload) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK', action.payload, action.actorHandle ?? null) ],
       };
     case "START_TIMER": {
       const existingTimers = { ...(state.timers || {}) };
@@ -512,7 +579,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       return {
         ...state,
         tasks: [ ...state.tasks, normalizedTask ],
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_TASK', { task: normalizedTask }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_TASK', { task: normalizedTask }, action.actorHandle ?? null) ],
       };
     }
     case "UPDATE_TASK": {
@@ -520,7 +587,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       return {
         ...state,
         tasks: state.tasks.map(t => t.id === normalizedTask.id ? normalizedTask : t),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_TASK', { task: normalizedTask }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_TASK', { task: normalizedTask }, action.actorHandle ?? null) ],
       };
     }
     case "DELETE_TASK":
@@ -529,7 +596,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         tasks: state.tasks.filter(t => t.id !== action.payload),
         // Also remove instances for this template
         taskInstances: state.taskInstances.filter(inst => inst.templateId !== action.payload),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_TASK', { taskId: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_TASK', { taskId: action.payload }, action.actorHandle ?? null) ],
       };
     case "DISABLE_TASK_AFTER_DATE":
       return {
@@ -539,11 +606,16 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
             ? { ...t, disabledAfter: action.payload.date }
             : t
         ),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('DISABLE_TASK_AFTER_DATE', { taskId: action.payload.taskId, date: action.payload.date }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('DISABLE_TASK_AFTER_DATE', { taskId: action.payload.taskId, date: action.payload.date }, action.actorHandle ?? null) ],
       };
     case "ADD_TASK_INSTANCE":
       // Check if instance already exists to prevent duplicates
-      const existingInstance = state.taskInstances.find(inst => inst.id === action.payload.id);
+      const existingInstance = state.taskInstances.find(inst =>
+        inst.id === action.payload.id ||
+        (inst.templateId === action.payload.templateId &&
+          inst.childId === action.payload.childId &&
+          inst.date === action.payload.date)
+      );
       if (existingInstance) {
         // Instance already exists, return state unchanged
         return state;
@@ -551,7 +623,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       return {
         ...state,
         taskInstances: [ ...state.taskInstances, action.payload ],
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_TASK_INSTANCE', { instance: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_TASK_INSTANCE', { instance: action.payload }, action.actorHandle ?? null) ],
       };
     case "REPLACE_TASK_INSTANCES": {
       const { taskId, startDate, instances, preserveCompleted } = action.payload;
@@ -579,23 +651,30 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       return {
         ...state,
         taskInstances: state.taskInstances.map(inst => inst.id === action.payload.id ? action.payload : inst),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_TASK_INSTANCE', { instance: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_TASK_INSTANCE', { instance: action.payload }, action.actorHandle ?? null) ],
       };
     case "DELETE_TASK_INSTANCE":
       return {
         ...state,
         taskInstances: state.taskInstances.filter(inst => inst.id !== action.payload),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_TASK_INSTANCE', { instanceId: action.payload }) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('DELETE_TASK_INSTANCE', { instanceId: action.payload }, action.actorHandle ?? null) ],
       };
     case "COMPLETE_TASK_INSTANCE": {
       const instance = state.taskInstances.find(inst => inst.id === action.payload.instanceId);
       if (!instance) return state;
+      const template = state.tasks.find(t => t.id === instance.templateId);
+      const snapshotOverrides = {
+        titleOverride: instance.titleOverride ?? template?.title,
+        emojiOverride: instance.emojiOverride ?? template?.emoji,
+        colorOverride: instance.colorOverride ?? template?.color,
+        dueAtOverride: instance.dueAtOverride ?? instance.dueAt,
+      };
       
       return {
         ...state,
         taskInstances: state.taskInstances.map(inst =>
           inst.id === action.payload.instanceId
-            ? { ...inst, completed: true, completedAt: new Date().toISOString() }
+            ? { ...inst, completed: true, completedAt: new Date().toISOString(), ...snapshotOverrides }
             : inst
         ),
         children: state.children.map(child =>
@@ -612,7 +691,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
           ...state.completedTasks,
           [`${instance.childId}-${instance.templateId}-${instance.date}`]: true,
         },
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK_INSTANCE', action.payload) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK_INSTANCE', action.payload, action.actorHandle ?? null) ],
       };
     }
     case "STOP_TIMER": {
@@ -631,44 +710,35 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       let baseMoneyReward = 0;
       let latePenalty = 0.5;
       let autoApprove = !!state.parentSettings.timedAutoApproveDefault;
+      let allowNegative = false;
+      const parsedKey = parseTaskKey(timer.taskKey);
+      const parsedTaskId = parsedKey.taskId;
+      const parsedDate = parsedKey.date;
+      let matchedTask: Task | undefined;
       
       // Try to find task from taskKey (format: childId-taskId-date or legacy childId:choreId)
-      const taskKeyParts = timer.taskKey.split('-');
-      if (taskKeyParts.length >= 2) {
-        // New format: childId-taskId-date (date is YYYY-MM-DD, so last 3 parts)
-        // Extract taskId: everything between childId (first part) and date (last 3 parts)
-        const taskId = taskKeyParts.length >= 5 
-          ? taskKeyParts.slice(1, -3).join('-') // Has date: remove childId (first) and date (last 3)
-          : taskKeyParts.slice(1).join('-'); // No date: just remove childId
-        const task = state.tasks.find(t => t.id === taskId);
-        if (task) {
-          baseStarReward = task.stars || 0;
-          baseMoneyReward = task.money || 0;
-          if (task.timed) {
-            latePenalty = task.timed.latePenaltyPercent ?? 0.5;
-            autoApprove = task.timed.autoApproveOnStop ?? autoApprove;
-          }
-        }
-      } else if (timer.taskKey.includes(':')) {
+      if (parsedTaskId) {
+        matchedTask = state.tasks.find(t => t.id === parsedTaskId);
+      } else if (parsedKey.legacyChoreId !== undefined) {
         // Legacy format: childId:choreId (for backward compatibility during migration)
-        const [, chorePart] = timer.taskKey.split(":");
-        const choreId = parseInt(chorePart || "", 10);
-        // Try to find task with legacy chore ID
-        const task = state.tasks.find(t => t.id === `chore_${choreId}`);
-        if (task) {
-          baseStarReward = task.stars || 0;
-          baseMoneyReward = task.money || 0;
-          if (task.timed) {
-            latePenalty = task.timed.latePenaltyPercent ?? 0.5;
-            autoApprove = task.timed.autoApproveOnStop ?? autoApprove;
-          }
+        matchedTask = state.tasks.find(t => t.id === `chore_${parsedKey.legacyChoreId}`);
+      }
+
+      if (matchedTask) {
+        baseStarReward = matchedTask.stars || 0;
+        baseMoneyReward = matchedTask.money || 0;
+        if (matchedTask.timed) {
+          latePenalty = matchedTask.timed.latePenaltyPercent ?? 0.5;
+          autoApprove = matchedTask.timed.autoApproveOnStop ?? autoApprove;
+          allowNegative = matchedTask.timed.allowNegative ?? false;
         }
       }
       
       const rewardPercentage = elapsedSeconds <= allowed ? 1 : 1 - latePenalty;
       // Stars shouldn't scale; if completed on time give full stars, otherwise no stars for late completion
       const adjustedStars = elapsedSeconds <= allowed ? baseStarReward : 0;
-      const adjustedMoney = +(baseMoneyReward * rewardPercentage);
+      const adjustedMoneyRaw = baseMoneyReward * rewardPercentage;
+      const adjustedMoney = !allowNegative && adjustedMoneyRaw < 0 ? 0 : +(adjustedMoneyRaw);
 
       // remove timer
       delete timers[action.payload.timerId];
@@ -689,23 +759,47 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       };
 
       // Find and update the instance if it exists
+      let matchedInstance = false;
       const updatedInstances = (state.taskInstances || []).map(inst => {
-        // Match instance by taskKey pattern: childId-templateId-date
-        const parts = timer.taskKey.split('-');
-        const templateIdPart = parts[1];
-        const datePart = parts[2];
-        if (inst.childId === timer.childId && 
-            inst.templateId === templateIdPart && 
-            inst.date === datePart) {
+        if (parsedTaskId && parsedDate &&
+            inst.childId === timer.childId &&
+            inst.templateId === parsedTaskId &&
+            inst.date === parsedDate) {
+          matchedInstance = true;
           return {
             ...inst,
             completed: true,
             completedAt: action.payload.stoppedAt,
             timedCompletionId: completion.id,
+            ...(matchedTask ? {
+              titleOverride: inst.titleOverride ?? matchedTask.title,
+              emojiOverride: inst.emojiOverride ?? matchedTask.emoji,
+              colorOverride: inst.colorOverride ?? matchedTask.color,
+              dueAtOverride: inst.dueAtOverride ?? inst.dueAt,
+            } : {}),
           };
         }
         return inst;
       });
+
+      if (!matchedInstance && parsedTaskId && parsedDate) {
+        updatedInstances.push({
+          id: `realized_${parsedTaskId}_${timer.childId}_${parsedDate}_${Date.now()}`,
+          templateId: parsedTaskId,
+          childId: timer.childId,
+          date: parsedDate,
+          completed: true,
+          completedAt: action.payload.stoppedAt,
+          timedCompletionId: completion.id,
+          createdAt: new Date().toISOString(),
+          stars: matchedTask?.stars ?? 0,
+          money: matchedTask?.money ?? 0,
+          titleOverride: matchedTask?.title,
+          emojiOverride: matchedTask?.emoji,
+          colorOverride: matchedTask?.color,
+          dueAtOverride: undefined,
+        });
+      }
 
       let newState = {
         ...state,
@@ -799,10 +893,11 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         actionLog: [ ...(defaultState.actionLog || []), makeLogEntry('RESET_ALL_DATA') ],
       };
     case "SET_STATE":
-      return {
+      return pruneState({
         ...action.payload,
         tasks: (action.payload.tasks || []).map(normalizeTaskPayload),
-      };
+        taskInstances: (action.payload.taskInstances || []).map(normalizeInstanceDates),
+      });
     default:
       return state;
   }
@@ -816,7 +911,11 @@ interface ChoresAppContextType {
 const ChoresAppContext = createContext<ChoresAppContextType | undefined>(undefined);
 
 export function ChoresAppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(choresAppReducer, defaultState, (initial) => {
+  const reducerWithPrune = React.useCallback((state: ChoresAppState, action: ChoresAppAction) => {
+    return pruneState(choresAppReducer(state, action));
+  }, []);
+
+  const [state, dispatch] = useReducer(reducerWithPrune, defaultState, (initial) => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("choresAppState");
       if (saved) {
@@ -901,11 +1000,13 @@ export function ChoresAppProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          const normalizedInstances = uniqueInstances.map(normalizeInstanceDates);
+
           return {
             ...initial,
             children: Array.isArray(parsed.children) ? (parsed.children as unknown as Child[]) : initial.children,
             tasks: normalizedTasks,
-            taskInstances: uniqueInstances,
+            taskInstances: normalizedInstances,
             completedTasks: (parsed.completedTasks && typeof parsed.completedTasks === 'object') ? (parsed.completedTasks as unknown as Record<string, boolean>) : initial.completedTasks,
             timers: (parsed.timers && typeof parsed.timers === 'object') ? (parsed.timers as unknown as Record<string, Timer>) : initial.timers,
             timedCompletions: Array.isArray(parsed.timedCompletions) ? (parsed.timedCompletions as unknown as TimedCompletion[]) : initial.timedCompletions,
@@ -921,7 +1022,8 @@ export function ChoresAppProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    localStorage.setItem("choresAppState", JSON.stringify(state));
+    const pruned = pruneState(state);
+    localStorage.setItem("choresAppState", JSON.stringify(pruned));
   }, [state]);
 
   return (

@@ -6,7 +6,7 @@ import { useModalControl } from "@/components/ModalControlContext";
 
 export default function Home() {
   const { state } = useChoresApp();
-  const { openOneOffTaskModal } = useModalControl();
+  const { openAddTaskModal } = useModalControl();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -64,7 +64,7 @@ export default function Home() {
         <title>Family Chores</title>
       </Head>
       <main className="main-view">
-        <ChildrenGrid childrenList={sortedChildren} onAddTask={openOneOffTaskModal} />
+        <ChildrenGrid childrenList={sortedChildren} onAddTask={openAddTaskModal} />
       </main>
     </>
   );

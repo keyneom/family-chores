@@ -1,5 +1,6 @@
 import { choresAppReducer, ChoresAppState, Timer, TimedCompletion } from '../components/ChoresAppContext';
 import type { Task } from '../types/task';
+import { buildTaskKey } from '../utils/taskKey';
 
 describe('Timed Task Reducer', () => {
   const createInitialState = (): ChoresAppState => {
@@ -45,12 +46,14 @@ describe('Timed Task Reducer', () => {
     };
   };
 
+  const taskKeyFor = (childId: number, date: string) => buildTaskKey(childId, 'task1', date);
+
   describe('START_TIMER', () => {
     it('should create a timer in state', () => {
       const initialState = createInitialState();
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: new Date().toISOString(),
         allowedSeconds: 300,
@@ -105,7 +108,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -133,7 +136,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -152,7 +155,7 @@ describe('Timed Task Reducer', () => {
       expect(completion?.moneyReward).toBe(5.0); // 50% of 10.0
     });
 
-    it('should handle large-late completion causing negative money', () => {
+    it('should clamp negative money when allowNegative is false', () => {
       const initialState = createInitialState();
       // Update task with penalty > 100% (creates negative payout when late)
       initialState.tasks[0] = {
@@ -161,6 +164,7 @@ describe('Timed Task Reducer', () => {
         timed: {
           ...initialState.tasks[0].timed!,
           latePenaltyPercent: 1.5, // 150% penalty -> rewardPercentage = -0.5
+          allowNegative: false,
         },
       };
 
@@ -169,7 +173,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -184,7 +188,41 @@ describe('Timed Task Reducer', () => {
       const completion = newState.timedCompletions?.[0];
       expect(completion?.elapsedSeconds).toBe(600);
       expect(completion?.rewardPercentage).toBe(-0.5);
-      expect(completion?.moneyReward).toBe(-10.0); // Negative money (debt)
+      expect(completion?.moneyReward).toBe(0); // Clamped
+    });
+
+    it('should allow negative money when allowNegative is true', () => {
+      const initialState = createInitialState();
+      initialState.tasks[0] = {
+        ...initialState.tasks[0],
+        money: 20.0,
+        timed: {
+          ...initialState.tasks[0].timed!,
+          latePenaltyPercent: 1.5,
+          allowNegative: true,
+        },
+      };
+
+      const startTime = new Date('2024-01-01T10:00:00Z');
+      const stopTime = new Date('2024-01-01T10:10:00Z');
+
+      const timer: Timer = {
+        id: 'timer_456',
+        taskKey: taskKeyFor(1, '2024-01-01'),
+        childId: 1,
+        startedAt: startTime.toISOString(),
+        allowedSeconds: 300,
+      };
+      initialState.timers = { [timer.id]: timer };
+
+      const newState = choresAppReducer(initialState, {
+        type: 'STOP_TIMER',
+        payload: { timerId: timer.id, stoppedAt: stopTime.toISOString() },
+      });
+
+      const completion = newState.timedCompletions?.[0];
+      expect(completion?.rewardPercentage).toBe(-0.5);
+      expect(completion?.moneyReward).toBe(-10.0);
     });
 
     it('should auto-approve and apply rewards when autoApproveOnStop is true', () => {
@@ -203,7 +241,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -243,7 +281,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -280,7 +318,7 @@ describe('Timed Task Reducer', () => {
 
       const timer: Timer = {
         id: 'timer_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: startTime.toISOString(),
         allowedSeconds: 300,
@@ -313,7 +351,7 @@ describe('Timed Task Reducer', () => {
       const initialState = createInitialState();
       const completion: TimedCompletion = {
         id: 'completion_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: new Date('2024-01-01T10:00:00Z').toISOString(),
         stoppedAt: new Date('2024-01-01T10:04:00Z').toISOString(),
@@ -352,7 +390,7 @@ describe('Timed Task Reducer', () => {
       const initialState = createInitialState();
       const completion: TimedCompletion = {
         id: 'completion_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: new Date('2024-01-01T10:00:00Z').toISOString(),
         stoppedAt: new Date('2024-01-01T10:04:00Z').toISOString(),
@@ -385,7 +423,7 @@ describe('Timed Task Reducer', () => {
       const initialState = createInitialState();
       const completion: TimedCompletion = {
         id: 'completion_123',
-        taskKey: '1-task1-2024-01-01', // Format: childId-taskId-date
+        taskKey: taskKeyFor(1, '2024-01-01'), // Format: childId-taskId-date
         childId: 1,
         startedAt: new Date('2024-01-01T10:00:00Z').toISOString(),
         stoppedAt: new Date('2024-01-01T10:04:00Z').toISOString(),
@@ -418,4 +456,3 @@ describe('Timed Task Reducer', () => {
     });
   });
 });
-

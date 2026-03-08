@@ -31,15 +31,16 @@ Before signing off any UX change (especially onboarding/tutorial workflows):
    - **DO NOT SKIP THIS STEP** - the tutorial will not appear if localStorage contains onboarding completion data
 
 2. **Follow the entire tutorial** – step through from welcome to completion:
-   - After **every** action (click, type, submit), capture a `browser_snapshot`
-   - After **every** modal transition, capture a `browser_snapshot`
-   - After **every** tour step advance, capture a `browser_snapshot`
-   - **DO NOT PROCEED** to the next action until you have verified the current snapshot
+   - After **every** action (click, type, submit), capture a `browser_snapshot` and `browser_screenshot`
+   - After **every** modal transition, capture a `browser_snapshot` and `browser_screenshot`
+   - After **every** tour step advance, capture a `browser_snapshot` and `browser_screenshot`
+   - **DO NOT PROCEED** to the next action until you have verified the current snapshot and screenshot match expectations.
 
 3. **Checklist per step** (verify in each snapshot):
    - ✅ Only the intended modal/overlay is present (not multiple modals overlapping)
    - ✅ CTA required by the tutorial is unobstructed (Shepherd dialog doesn't block buttons)
    - ✅ All form fields are visible and accessible (not hidden off-screen)
+   - ✅ No content overflows inappropriately from its container (e.g. modal content overflowing the screen, or content being cut off--exceptions are for content that is intentionally overflowed, such as a scrollable list of items, images being cut or cropped, etc.)
    - ✅ Inline errors/success toasts display near the related element without covering other actions
    - ✅ Keyboard navigation/focus order still works
    - ✅ No console errors (check `browser_console_messages` after each step)

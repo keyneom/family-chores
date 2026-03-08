@@ -13,8 +13,11 @@ import type {
   TaskAssignmentSettings,
   Weekday,
 } from "../../types/task";
-import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule } from "../../utils/recurrenceBuilder";
+import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule, deriveDueTimeFromCron } from "../../utils/recurrenceBuilder";
 import { getTheoreticalAssignment } from "../../utils/projectionUtils";
+import { computeDueAt } from "../../utils/taskInstanceGeneration";
+import { getLocalDateTimeString, getLocalDateString } from "../../utils/dateUtils";
+import { requiresPin, hasApprovers } from "../../utils/approvalUtils";
 import PinModal from "./PinModal";
 import AlertModal from "./AlertModal";
 
@@ -66,19 +69,19 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [timeOfDay, setTimeOfDay] = useState("17:00");
   const [useCron, setUseCron] = useState(false);
   const [cronExpression, setCronExpression] = useState("0 17 * * *");
-  const [oneOffDate, setOneOffDate] = useState(new Date().toISOString().split('T')[0]);
+  const [oneOffDate, setOneOffDate] = useState(() => getLocalDateString());
   const [oneOffTime, setOneOffTime] = useState("17:00");
 
   // timed fields
   const [allowedMinutes, setAllowedMinutes] = useState(5);
   const [latePenaltyPercent, setLatePenaltyPercent] = useState(50);
   const [autoApproveOnStop, setAutoApproveOnStop] = useState(false);
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(() => getLocalDateString());
   const [timezone, setTimezone] = useState(
     () => (typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC")
   );
   const [endMode, setEndMode] = useState<'never' | 'onDate' | 'afterOccurrences'>('never');
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => getLocalDateString());
   const [occurrenceCount, setOccurrenceCount] = useState(10);
   const [previewDates, setPreviewDates] = useState<string[]>([]);
   const [pinOpen, setPinOpen] = useState(false);
@@ -86,7 +89,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [alertOpen, setAlertOpen] = useState(false);
 
   useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     if (initialTask) {
       setEditingId(String(initialTask.id));
       // Handle unified Task type
@@ -207,7 +210,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       setTimeOfDay('17:00');
       setUseCron(false);
       setCronExpression('0 17 * * *');
-      setOneOffDate(new Date().toISOString().split('T')[0]);
+      setOneOffDate(getLocalDateString());
       setOneOffTime('17:00');
       setStartDate(today);
       setEndMode('never');
@@ -390,9 +393,9 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     }
   };
 
-  const performSave = () => {
+  const performSave = (actorHandle?: string) => {
     const id = editingId ?? `task_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-    const nowIsoDate = new Date().toISOString().split('T')[0];
+    const nowIsoDate = getLocalDateString();
     const sanitizedLinkedTaskId = linkedTaskId && linkedTaskId !== id ? linkedTaskId : undefined;
     
     // When linked, don't store assignedChildIds or rotationOrder - read from linked task
@@ -468,26 +471,57 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         if (instance) {
           // Get the new childId from selectedChildIds (for single instance, use first selected child)
           const newChildId = selectedChildIds.length > 0 ? selectedChildIds[0] : instance.childId;
-          
+          const computedDueAt = type === 'oneoff'
+            ? buildDueDate(oneOffDate, oneOffTime)
+            : (computeDueAt(task, instance.date) || instance.dueAt);
           const updatedInstance: TaskInstance = {
             ...instance,
             childId: newChildId,
             stars: Number(starReward),
             money: Number(moneyReward),
+            titleOverride: title || instance.titleOverride,
+            emojiOverride: emoji || instance.emojiOverride,
+            colorOverride: color || instance.colorOverride,
+            dueAtOverride: computedDueAt || instance.dueAtOverride,
           };
-          dispatch({ type: 'UPDATE_TASK_INSTANCE', payload: updatedInstance });
+          dispatch({ type: 'UPDATE_TASK_INSTANCE', payload: updatedInstance, actorHandle });
         }
       } else {
         // Edit template (for 'future' or 'template' options, or default)
-        dispatch({ type: 'UPDATE_TASK', payload: task });
+        dispatch({ type: 'UPDATE_TASK', payload: task, actorHandle });
         if (onSave) onSave(task);
+
+        if (task.type === 'oneoff' && task.oneOff?.dueDate) {
+          const dueDateStr = task.oneOff.dueDate.split('T')[0];
+          const updatedChildId = selectedChildIds.length > 0 ? selectedChildIds[0] : undefined;
+          (state.taskInstances || [])
+            .filter((inst) => inst.templateId === task.id && !inst.completed)
+            .forEach((inst) => {
+              dispatch({
+                type: 'UPDATE_TASK_INSTANCE',
+                payload: {
+                  ...inst,
+                  ...(updatedChildId !== undefined ? { childId: updatedChildId } : {}),
+                  date: dueDateStr,
+                  dueAt: task.oneOff?.dueDate,
+                  dueAtOverride: undefined,
+                  stars: task.stars,
+                  money: task.money,
+                },
+                actorHandle,
+              });
+            });
+        }
         
         // For recurring tasks, we no longer pre-generate instances.
         // The projection engine will calculate assignments on-the-fly.
         // Only remove uncompleted instances if editing template/future.
-        if (scope === 'template' || scope === 'future') {
-          const todayDate = new Date().toISOString().split('T')[0];
-          const purgeDate = scope === 'future' ? todayDate : undefined;
+        if ((scope === 'template' || scope === 'future') && task.type !== 'oneoff') {
+          const todayDate = getLocalDateString();
+          const instanceDate = editInstanceId
+            ? state.taskInstances.find(inst => inst.id === editInstanceId)?.date
+            : undefined;
+          const purgeDate = scope === 'future' ? (instanceDate || todayDate) : undefined;
           
           // Remove uncompleted instances from purgeDate forward (keep completed ones)
           // The REPLACE_TASK_INSTANCES action will filter out uncompleted instances
@@ -504,7 +538,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       }
     } else {
       // Creating a new task
-      dispatch({ type: 'ADD_TASK', payload: task });
+      dispatch({ type: 'ADD_TASK', payload: task, actorHandle });
       
       // For one-off tasks, create instances immediately for the due date
       // One-off tasks are "realized" immediately since they're not recurring
@@ -545,11 +579,12 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     
     // Check if approval is required for editing tasks
     if (editingId) {
-      const approvalRequired = !!state.parentSettings?.approvals?.editTasks;
-      const approversExist = (state.parentSettings.pins || []).length > 0;
-      
+      const approvalRequired = requiresPin({
+        action: 'editTasks',
+        parentSettings: state.parentSettings,
+      });
       if (approvalRequired) {
-        if (!approversExist) {
+        if (!hasApprovers(state.parentSettings)) {
           setAlertOpen(true);
           return;
         }
@@ -564,10 +599,19 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     performSave();
   };
 
+  const handleFormKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      const target = e.target as HTMLElement | null;
+      if (target && target.tagName === 'SELECT') {
+        e.preventDefault();
+      }
+    }
+  };
+
   const handlePinSuccess = (actorHandle?: string) => {
     setPinOpen(false);
     if (pendingSave) {
-      performSave();
+      performSave(actorHandle);
       setPendingSave(null);
     }
   };
@@ -588,10 +632,12 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
           <span className="close" onClick={(e) => { e.stopPropagation(); onClose(); }}>&times;</span>
         </div>
         <div className="modal-body">
-          <form id="task-form" onSubmit={handleSubmit}>
-            <label>
+          <form id="task-form" onSubmit={handleSubmit} onKeyDown={handleFormKeyDown}>
+            <label htmlFor="task-title">
               Title:
               <input 
+                id="task-title"
+                name="task-title"
                 type="text" 
                 value={title} 
                 onChange={e => setTitle(e.target.value)} 
@@ -600,9 +646,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 data-tour="task-title-input"
               />
             </label>
-            <label>
+            <label htmlFor="task-emoji">
               Emoji:
               <input 
+                id="task-emoji"
+                name="task-emoji"
                 type="text" 
                 value={emoji} 
                 onChange={e => setEmoji(e.target.value)} 
@@ -610,50 +658,60 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 placeholder="📝"
               />
             </label>
-            <label>
+            <label htmlFor="task-color">
               Color:
               <input 
+                id="task-color"
+                name="task-color"
                 type="color" 
                 value={color} 
                 onChange={e => setColor(e.target.value)} 
               />
             </label>
-            <label>
+            <label htmlFor="task-type">
               Type:
-              <select value={type} onChange={e => setType(e.target.value as 'recurring' | 'oneoff')}>
+              <select id="task-type" name="task-type" value={type} onChange={e => setType(e.target.value as 'recurring' | 'oneoff')}>
                 <option value="recurring">Recurring</option>
                 <option value="oneoff">One-off</option>
               </select>
             </label>
-            <label>
+            <label htmlFor="task-stars">
               Star Reward:
               <input 
+                id="task-stars"
+                name="task-stars"
                 type="number" 
                 value={starReward} 
                 min={-10} 
                 onChange={e => setStarReward(Number(e.target.value))} 
               />
             </label>
-            <label>
+            <label htmlFor="task-money">
               Money Reward:
               <input 
+                id="task-money"
+                name="task-money"
                 type="number" 
                 value={moneyReward} 
                 step="0.01" 
                 onChange={e => setMoneyReward(Number(e.target.value))} 
               />
             </label>
-            <label>
+            <label htmlFor="task-require-pin">
               Require PIN:
               <input 
+                id="task-require-pin"
+                name="task-require-pin"
                 type="checkbox" 
                 checked={requirePin} 
                 onChange={e => setRequirePin(e.target.checked)} 
               />
             </label>
-            <label>
+            <label htmlFor="task-voice">
               Voice Announcements:
               <input 
+                id="task-voice"
+                name="task-voice"
                 type="checkbox" 
                 checked={voiceAnnouncements !== false} 
                 onChange={e => setVoiceAnnouncements(e.target.checked ? true : false)} 
@@ -667,25 +725,6 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
             <fieldset className="form-section">
               <legend>Assignment</legend>
-              {rotationMode === 'round-robin' && (
-                <label>
-                  Link rotation with another task:
-                  <select 
-                    value={linkedTaskId || ''} 
-                    onChange={(e) => setLinkedTaskId(e.target.value || undefined)}
-                  >
-                    <option value="">None (independent rotation)</option>
-                    {state.tasks
-                      .filter(t => t.id !== editingId && t.rotation?.mode === 'round-robin')
-                      .map(task => (
-                        <option key={task.id} value={task.id}>
-                          {task.title || 'Untitled task'}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              )}
-              
               {rotationMode === 'round-robin' && (
                 <label>
                   Link rotation with another task:
@@ -912,9 +951,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                   Use advanced cron expression
                 </label>
                 {useCron ? (
-                  <label>
+                  <label htmlFor="schedule-cron">
                     Cron Expression:
                     <input 
+                      id="schedule-cron"
+                      name="schedule-cron"
                       type="text" 
                       value={cronExpression}
                       onChange={e => setCronExpression(e.target.value)}
@@ -923,7 +964,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                   </label>
                 ) : (
                   <>
-                    <label>
+                    <label htmlFor="schedule-frequency">
                       <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         Frequency:
                         <span 
@@ -945,14 +986,14 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                           ℹ️
                         </span>
                       </span>
-                      <select value={frequency} onChange={e => setFrequency(e.target.value as RecurrenceFrequency)}>
+                      <select id="schedule-frequency" name="schedule-frequency" value={frequency} onChange={e => setFrequency(e.target.value as RecurrenceFrequency)}>
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
                         <option value="monthly">Monthly</option>
                         <option value="yearly">Yearly</option>
                       </select>
                     </label>
-                    <label>
+                    <label htmlFor="schedule-interval">
                       <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         Interval:
                         <span 
@@ -975,6 +1016,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                         </span>
                       </span>
                       <input
+                        id="schedule-interval"
+                        name="schedule-interval"
                         type="number"
                         min={1}
                         value={interval}
@@ -982,9 +1025,15 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                         title="How often the task repeats. For example, '2' with 'Daily' means every 2 days."
                       />
                     </label>
-                    <label>
+                    <label htmlFor="schedule-start-date">
                       Start Date:
-                      <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                      <input
+                        id="schedule-start-date"
+                        name="schedule-start-date"
+                        type="date"
+                        value={startDate}
+                        onChange={e => setStartDate(e.target.value)}
+                      />
                     </label>
                     {frequency === 'weekly' && (
                       <div className="weekday-picker">
@@ -1001,9 +1050,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                       </div>
                     )}
                     {frequency === 'monthly' && (
-                      <label>
+                      <label htmlFor="schedule-month-day">
                         Day of month:
                         <input
+                          id="schedule-month-day"
+                          name="schedule-month-day"
                           type="number"
                           min={1}
                           max={31}
@@ -1012,9 +1063,9 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                         />
                       </label>
                     )}
-                    <label>
+                    <label htmlFor="schedule-time">
                       Time of day:
-                      <input type="time" value={timeOfDay} onChange={e => setTimeOfDay(e.target.value)} />
+                      <input id="schedule-time" name="schedule-time" type="time" value={timeOfDay} onChange={e => setTimeOfDay(e.target.value)} />
                     </label>
                     <fieldset className="form-subsection">
                       <legend>Ends</legend>
@@ -1037,6 +1088,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                           />
                           <span>On</span>
                           <input
+                            id="schedule-end-date"
+                            name="schedule-end-date"
                             type="date"
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
@@ -1053,6 +1106,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                           />
                           <span>After</span>
                           <input
+                            id="schedule-occurrences"
+                            name="schedule-occurrences"
                             type="number"
                             min={1}
                             value={occurrenceCount}
@@ -1069,9 +1124,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     </button>
                   </>
                 )}
-                <label>
+                <label htmlFor="schedule-timezone">
                   Timezone:
                   <input
+                    id="schedule-timezone"
+                    name="schedule-timezone"
                     type="text"
                     value={timezone}
                     onChange={(e) => setTimezone(e.target.value)}
@@ -1098,13 +1155,25 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
             {type === 'oneoff' && (
               <fieldset className="form-section">
                 <legend>Due Date</legend>
-                <label>
+                <label htmlFor="oneoff-date">
                   Date:
-                  <input type="date" value={oneOffDate} onChange={e => setOneOffDate(e.target.value)} />
+                  <input
+                    id="oneoff-date"
+                    name="oneoff-date"
+                    type="date"
+                    value={oneOffDate}
+                    onChange={e => setOneOffDate(e.target.value)}
+                  />
                 </label>
-                <label>
+                <label htmlFor="oneoff-time">
                   Time:
-                  <input type="time" value={oneOffTime} onChange={e => setOneOffTime(e.target.value)} />
+                  <input
+                    id="oneoff-time"
+                    name="oneoff-time"
+                    type="time"
+                    value={oneOffTime}
+                    onChange={e => setOneOffTime(e.target.value)}
+                  />
                 </label>
               </fieldset>
             )}
@@ -1114,8 +1183,10 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
               <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
                 ⏱️ Timer Settings
               </legend>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+              <label htmlFor="timed-enabled" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                 <input 
+                  id="timed-enabled"
+                  name="timed-enabled"
                   type="checkbox" 
                   checked={isTimed} 
                   onChange={e => setIsTimed(e.target.checked)} 
@@ -1124,18 +1195,22 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
               </label>
               {isTimed && (
                 <>
-                  <label>
+                  <label htmlFor="timed-allowed-minutes">
                     Allowed Minutes:
                     <input 
+                      id="timed-allowed-minutes"
+                      name="timed-allowed-minutes"
                       type="number" 
                       value={allowedMinutes} 
                       min={1} 
                       onChange={e => setAllowedMinutes(Number(e.target.value))} 
                     />
                   </label>
-                  <label>
+                  <label htmlFor="timed-late-penalty">
                     Late Penalty (%):
                     <input 
+                      id="timed-late-penalty"
+                      name="timed-late-penalty"
                       type="number" 
                       value={latePenaltyPercent} 
                       min={-500}
@@ -1145,9 +1220,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     50 = half reward when late; 150 = -50% (debt).
                   </p>
                   </label>
-                  <label>
+                  <label htmlFor="timed-auto-approve">
                     Auto-approve on Stop:
                     <input 
+                      id="timed-auto-approve"
+                      name="timed-auto-approve"
                       type="checkbox" 
                       checked={autoApproveOnStop} 
                       onChange={e => setAutoApproveOnStop(e.target.checked)} 
@@ -1178,7 +1255,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         <PinModal 
           open={pinOpen} 
           onClose={() => { setPinOpen(false); setPendingSave(null); }} 
-          onSuccess={() => handlePinSuccess()}
+          onSuccess={handlePinSuccess}
           message="Enter a parent PIN to save changes to this task."
         />
         <AlertModal
@@ -1213,9 +1290,11 @@ function buildSchedulePayload(values: ScheduleFormValues): ScheduleDefinition | 
   if (values.useCron) {
     const expr = values.cronExpression.trim();
     if (!expr) return undefined;
+    const derivedDueTime = deriveDueTimeFromCron(expr);
     return {
       cronExpression: expr,
       timezone: values.timezone,
+      ...(derivedDueTime ? { dueTime: derivedDueTime } : {}),
     };
   }
 
@@ -1266,15 +1345,14 @@ function buildLegacyRecurringData(
 }
 
 function buildDueDate(date: string, time: string): string {
-  const baseDate = date || new Date().toISOString().split('T')[0];
+  const baseDate = date || getLocalDateString();
   const [hourStr = '00', minuteStr = '00'] = (time || '00:00').split(':');
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
   // Create date in local timezone to avoid timezone conversion issues
   const due = new Date(`${baseDate}T00:00:00`);
   due.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0);
-  // Return ISO string - this is correct for storage, but we need to compare dates in local timezone
-  return due.toISOString();
+  return getLocalDateTimeString(due);
 }
 
 function formatPreviewDateTime(iso: string): string {

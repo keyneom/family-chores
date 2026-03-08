@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Child, useChoresApp } from "../ChoresAppContext";
+import { requiresPin, hasApprovers } from "../../utils/approvalUtils";
 import PinModal from "./PinModal";
 import AlertModal from "./AlertModal";
 
@@ -7,7 +8,7 @@ export interface EditChildModalProps {
   open: boolean;
   onClose: () => void;
   child: Child | null;
-  onSave: (child: Child) => void;
+  onSave: (child: Child, actorHandle?: string) => void;
   onDelete: (childId: number) => void;
 }
 
@@ -31,10 +32,9 @@ export default function EditChildModal({ open, onClose, child, onSave, onDelete 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const updated: Child = { ...child!, name, blockchainAddress: blockchainAddress || undefined } as Child;
-    const approvalRequired = !!state.parentSettings?.approvals?.editTasks;
-    const approversExist = (state.parentSettings.pins || []).length > 0;
+    const approvalRequired = requiresPin({ action: 'editTasks', parentSettings: state.parentSettings });
     if (approvalRequired) {
-      if (!approversExist) {
+      if (!hasApprovers(state.parentSettings)) {
         setAlertOpen(true);
         return;
       }
@@ -46,9 +46,9 @@ export default function EditChildModal({ open, onClose, child, onSave, onDelete 
     onSave(updated);
   };
 
-  const handlePinSuccess = () => {
+  const handlePinSuccess = (actorHandle?: string) => {
     if (pendingSave) {
-      onSave(pendingSave);
+      onSave(pendingSave, actorHandle);
       setPendingSave(null);
     }
     setPinOpen(false);

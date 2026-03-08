@@ -16,6 +16,16 @@ export function getLocalDateString(date?: Date): string {
 }
 
 /**
+ * Format a Date as YYYY-MM-DDTHH:mm in local time (no timezone suffix).
+ */
+export function getLocalDateTimeString(date: Date): string {
+  const datePart = getLocalDateString(date);
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${datePart}T${hours}:${minutes}`;
+}
+
+/**
  * Get today's date as a YYYY-MM-DD string in local timezone
  */
 export function getTodayString(): string {
@@ -80,7 +90,6 @@ export function getPreviousDay(dateStr: string): string {
   date.setDate(date.getDate() - 1);
   return getLocalDateString(date);
 }
-
 
 
 

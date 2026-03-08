@@ -182,6 +182,11 @@ export interface TaskInstance {
   childId: number; // assigned child
   date: string; // ISO date (YYYY-MM-DD) for this instance
   dueAt?: string; // ISO timestamp for due date/time
+  // Instance-level display overrides (for edit-instance flows)
+  titleOverride?: string;
+  emojiOverride?: string;
+  colorOverride?: string;
+  dueAtOverride?: string;
   // Instance-specific overrides (optional)
   stars?: number; // override template stars
   money?: number; // override template money

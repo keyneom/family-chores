@@ -16,7 +16,7 @@ import Header from "./Header";
 
 import SettingsModal from "./modals/SettingsModal";
 import ConfirmationModal from "./modals/ConfirmationModal";
-import { useChoresApp } from "./ChoresAppContext";
+import { useChoresApp, type Child } from "./ChoresAppContext";
 import SyncModal from "./modals/SyncModal";
 import EditChildModal from "./modals/EditChildModal";
 import AddChildModal from "./modals/AddChildModal";
@@ -29,13 +29,9 @@ interface LayoutProps {
 }
 
 export default function Layout({ children }: LayoutProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [editChildOpen, setEditChildOpen] = useState(false);
+  type ActiveModal = 'settings' | 'sync' | 'editChild' | 'addChild' | 'addTask' | 'editTask' | 'deleteChild' | null;
+  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [editChildId, setEditChildId] = useState<number|null>(null);
-  const [addChildOpen, setAddChildOpen] = useState(false);
-  const [addUnifiedTaskOpen, setAddUnifiedTaskOpen] = useState(false);
-  const [editUnifiedTaskOpen, setEditUnifiedTaskOpen] = useState(false);
   const [taskModalDefaults, setTaskModalDefaults] = useState<{ type?: 'recurring' | 'oneoff'; childId?: number; rotationMode?: RotationMode }>({});
   const [initialTaskForEdit, setInitialTaskForEdit] = useState<Task | null>(null);
   const [editOption, setEditOption] = useState<'instance' | 'future' | 'template' | null>(null);
@@ -68,19 +64,11 @@ export default function Layout({ children }: LayoutProps) {
   
   // Handler to open the unified TaskModal
   const openAddUnifiedTaskModal = (defaults?: { type?: 'recurring' | 'oneoff'; childId?: number; rotationMode?: RotationMode }) => {
-    // Close Settings modal if open (UX principle: only one primary modal at a time)
-    if (settingsOpen) {
-      setSettingsOpen(false);
-    }
-    // Close Add Child modal if open
-    if (addChildOpen) {
-      setAddChildOpen(false);
-    }
     setTaskModalDefaults(defaults || {});
     setInitialTaskForEdit(null);
     setEditOption(null);
     setEditInstanceId(null);
-    setAddUnifiedTaskOpen(true);
+    setActiveModal('addTask');
   };
   
   // Legacy handlers for backward compatibility (used by ModalControlContext)
@@ -89,70 +77,51 @@ export default function Layout({ children }: LayoutProps) {
   };
   // Handler to open AddChildModal
   const openAddChildModal = () => {
-    // Close Settings modal if open (UX principle: only one primary modal at a time)
-    if (settingsOpen) {
-      setSettingsOpen(false);
-    }
-    setAddChildOpen(true);
+    setActiveModal('addChild');
   };
 
   // Handler to add a new child
   const handleAddChild = (child: { name: string; blockchainAddress?: string }) => {
     dispatch({
-      type: 'SET_STATE',
+      type: 'ADD_CHILD',
       payload: {
-        ...state,
-        children: [
-          ...state.children,
-          {
-            id: state.children.length > 0 ? Math.max(...state.children.map(c => c.id)) + 1 : 1,
-            name: child.name,
-            stars: 0,
-            money: 0,
-            blockchainAddress: child.blockchainAddress
-          }
-        ]
-      }
+        id: state.children.length > 0 ? Math.max(...state.children.map(c => c.id)) + 1 : 1,
+        name: child.name,
+        stars: 0,
+        money: 0,
+        blockchainAddress: child.blockchainAddress,
+      },
     });
   };
   // Handler to open EditChildModal for a specific child
   const openEditChildModal = (childId: number) => {
     setEditChildId(childId);
-    setEditChildOpen(true);
+    setActiveModal('editChild');
   };
 
   // Handler to save edits to a child
-  const handleEditChild = (updatedChild: { id: number; name: string; stars?: number; money?: number }) => {
+  const handleEditChild = (updatedChild: Child, actorHandle?: string) => {
     dispatch({
-      type: 'SET_STATE',
-      payload: {
-        ...state,
-        children: state.children.map(child => child.id === updatedChild.id ? { ...child, ...updatedChild } : child)
-      }
+      type: 'UPDATE_CHILD',
+      payload: updatedChild,
+      actorHandle,
     });
-    setEditChildOpen(false);
+    setActiveModal(null);
   };
 
   // Handler to delete a child
-  const [deleteChildConfirmOpen, setDeleteChildConfirmOpen] = React.useState(false);
   const [childToDelete, setChildToDelete] = React.useState<number | null>(null);
   
   const handleDeleteChild = (childId: number) => {
     setChildToDelete(childId);
-    setDeleteChildConfirmOpen(true);
+    setActiveModal('deleteChild');
   };
 
   const confirmDeleteChild = () => {
     if (childToDelete !== null) {
-      dispatch({
-        type: 'SET_STATE',
-        payload: {
-          ...state,
-          children: state.children.filter(child => child.id !== childToDelete)
-        }
-      });
+      dispatch({ type: 'DELETE_CHILD', payload: childToDelete });
       setChildToDelete(null);
-      setEditChildOpen(false);
+      setActiveModal(null);
     }
   };
 
@@ -163,13 +132,9 @@ export default function Layout({ children }: LayoutProps) {
     setInitialTaskForEdit(null);
     setEditOption(null);
     setEditInstanceId(null);
-    setAddUnifiedTaskOpen(true);
+    setActiveModal('addTask');
   };
   
-  // Handler to open OneOffTaskModal for a specific child
-  const openOneOffTaskModal = (childId: number) => {
-    openAddTaskModal(childId);
-  };
 
   // Handler to open TaskEditModal for a specific task
   const openTaskEditModal = (taskId: string | number, editOption?: 'instance' | 'future' | 'template', instanceId?: string) => {
@@ -179,7 +144,7 @@ export default function Layout({ children }: LayoutProps) {
       setInitialTaskForEdit(task);
       setEditOption(editOption || null);
       setEditInstanceId(instanceId || null);
-      setEditUnifiedTaskOpen(true);
+      setActiveModal('editTask');
     }
     // If task not found, do nothing (task may have been deleted)
   };
@@ -193,47 +158,34 @@ export default function Layout({ children }: LayoutProps) {
       openAddChildModal,
       openAddChoreModal: openAddUnifiedTaskModal, // Map to unified task modal (legacy compatibility)
       openEditChoreModal,
-      openOneOffTaskModal
     }}>
       <div className="container">
         <Header 
-          onSettingsClick={() => {
-            // Close other modals if open (UX principle: only one primary modal at a time)
-            if (addChildOpen) {
-              setAddChildOpen(false);
-            }
-            if (addUnifiedTaskOpen) {
-              setAddUnifiedTaskOpen(false);
-            }
-            if (editUnifiedTaskOpen) {
-              setEditUnifiedTaskOpen(false);
-            }
-            setSettingsOpen(true);
-          }}
-          onSyncClick={() => setSyncOpen(true)}
+          onSettingsClick={() => setActiveModal('settings')}
+          onSyncClick={() => setActiveModal('sync')}
         />
         <SettingsModal
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
+          open={activeModal === 'settings'}
+          onClose={() => setActiveModal(null)}
           onCreateTask={() => openAddUnifiedTaskModal()}
           onEditTask={(taskId) => {
-            setSettingsOpen(false);
+            setActiveModal(null);
             openTaskEditModal(taskId, 'template');
           }}
           onEditChild={(childId) => {
-            setSettingsOpen(false);
+            setActiveModal(null);
             openEditChildModal(childId);
           }}
         />
         <TaskModal
-          open={addUnifiedTaskOpen}
-          onClose={() => { setAddUnifiedTaskOpen(false); setTaskModalDefaults({}); }}
+          open={activeModal === 'addTask'}
+          onClose={() => { setActiveModal(null); setTaskModalDefaults({}); }}
           initialDefaults={taskModalDefaults}
         />
         <TaskModal
-          open={editUnifiedTaskOpen}
+          open={activeModal === 'editTask'}
           onClose={() => { 
-            setEditUnifiedTaskOpen(false); 
+            setActiveModal(null); 
             setInitialTaskForEdit(null); 
             setEditOption(null);
             setEditInstanceId(null);
@@ -242,15 +194,15 @@ export default function Layout({ children }: LayoutProps) {
           editOption={editOption}
           editInstanceId={editInstanceId}
         />
-        <AddChildModal open={addChildOpen} onClose={() => setAddChildOpen(false)} onAdd={handleAddChild} />
+        <AddChildModal open={activeModal === 'addChild'} onClose={() => setActiveModal(null)} onAdd={handleAddChild} />
         <EditChildModal
-          open={editChildOpen}
-          onClose={() => setEditChildOpen(false)}
+          open={activeModal === 'editChild'}
+          onClose={() => setActiveModal(null)}
           child={state.children.find(child => child.id === editChildId) || null}
           onSave={handleEditChild}
           onDelete={handleDeleteChild}
         />
-        <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
+        <SyncModal open={activeModal === 'sync'} onClose={() => setActiveModal(null)} />
         <TourGuide 
           active={tourActive} 
           onComplete={() => {
@@ -264,8 +216,8 @@ export default function Layout({ children }: LayoutProps) {
           }}
         />
         <ConfirmationModal
-          open={deleteChildConfirmOpen}
-          onClose={() => { setDeleteChildConfirmOpen(false); setChildToDelete(null); }}
+          open={activeModal === 'deleteChild'}
+          onClose={() => { setActiveModal(null); setChildToDelete(null); }}
           onConfirm={confirmDeleteChild}
           title="Delete Child"
           message="Are you sure you want to delete this child? This action cannot be undone."

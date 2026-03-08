@@ -1,5 +1,5 @@
 import { Task, TaskInstance } from '../types/task';
-import { parseLocalDate } from './dateUtils';
+import { parseLocalDate, getLocalDateTimeString } from './dateUtils';
 
 /**
  * Get the template for a given instance
@@ -56,5 +56,5 @@ export function computeDueAt(task: Task, date: string): string | undefined {
   // Use parseLocalDate to avoid timezone conversion issues
   const localDate = parseLocalDate(date);
   localDate.setHours(hours, minutes, 0, 0);
-  return localDate.toISOString();
+  return getLocalDateTimeString(localDate);
 }

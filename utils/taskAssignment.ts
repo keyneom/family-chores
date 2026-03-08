@@ -1,6 +1,7 @@
 import type Task from '@/types/task';
 import { Child } from '@/components/ChoresAppContext';
 import { getTheoreticalAssignment } from './projectionUtils';
+import { getLocalDateString } from './dateUtils';
 
 export interface AssignmentContext {
   date?: string; // YYYY-MM-DD
@@ -22,7 +23,7 @@ export function assignTaskToChild(
   allTasks: Task[] = [], // Kept for signature compatibility
   visited: Set<string> | null = null // Deprecated/Ignored
 ): AssignmentPlan[] {
-  const dateStr = context.date || new Date().toISOString().split('T')[0];
+  const dateStr = context.date || getLocalDateString();
   
   // Use the new O(1) projection engine
   const assignments = getTheoreticalAssignment(task, dateStr, allTasks);

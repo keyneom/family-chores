@@ -56,7 +56,7 @@ The app uses a **unified Task system** where all tasks (recurring, one-off, time
 - Timed tasks: reducer handles `START_TIMER` and `STOP_TIMER` actions; `STOP_TIMER` computes elapsed seconds, reward percentage, adjusted stars/money, and creates `TimedCompletion` records. Approvals can be auto-applied per-task or by parent default.
 - Task deletion: `DeleteTaskModal` provides three deletion options: delete single instance, disable all future instances (sets `disabledAfter` date), or delete template entirely. The `disabledAfter` field prevents new instances from being generated after the specified date.
 - Modal system: All modals use React Portals for proper stacking and include `stopPropagation` on close buttons to prevent overlay click-through issues.
-- Onboarding: First-run guided flow (`OnboardingWizard`) automatically triggers when no approvers or children exist, guiding users through setup.
+- Onboarding: First-run guided tour (`TourGuide`) automatically triggers when no approvers exist, guiding users through setup.
 
 ## Backlog — Detailed Tasks & Owner-Ready Descriptions
 
@@ -79,23 +79,20 @@ The sections below are written for contributors: each item includes a short desc
 
 ### 2) Onboarding / First-Run Guided Flow (large) — owner: UX/frontend ✅ COMPLETE
 
-- Goal: Add an optional first-run flow that guides a parent through: creating an approver, adding a child, making a sample timed task, and optionally connecting a wallet. This will remove any need to explain the new approver model in the settings UI.
-- Files: `components/Onboarding/OnboardingWizard.tsx`, `components/Layout.tsx` (triggers first-run modal).
+- Goal: Provide a first-run guided tour that helps a parent create an approver, add a child, and add a first task.
+- Files: `components/Onboarding/TourGuide.tsx`, `components/Layout.tsx` (triggers first-run tour).
 - Acceptance criteria:
-	- ✅ Runs automatically when no approvers or children exist (checks `parentSettings.pins` and `children.length`)
-	- ✅ Steps implemented as modal wizard:
+	- ✅ Runs automatically when no approvers exist and onboarding isn’t completed (checks `parentSettings.pins` + `parentSettings.onboardingCompleted`)
+	- ✅ Steps implemented as a guided tour overlay (not a separate wizard modal):
 		1. Welcome + short explanation
-		2. Create first approver (handle + 4-digit PIN) — creates `parentSettings.pins[0]`
+		2. Open Settings to create first approver (handle + PIN)
 		3. Add a child
-		4. Create a timed task sample and demo Start/Stop
-		5. Optionally connect wallet (or skip)
+		4. Create a task
 	- ✅ Each step can be skipped/cancelled
-	- ✅ Final step adds `ONBOARDING_COMPLETE` action log entry marking onboarding complete
+	- ✅ Completion sets `parentSettings.onboardingCompleted: true`
 - **Implementation Notes:**
-	- Onboarding wizard is fully implemented and integrated into `Layout.tsx`
-	- Automatically triggers when app detects no approvers or children
+	- Tour is implemented with Shepherd.js and integrated into `Layout.tsx`
 	- Uses `useChoresApp` context for state management
-	- Wallet connection uses Wagmi hooks (`useAccount`, `useConnect`)
 - Estimate: 1–2 days (completed)
 
 ### 3) Timed Tasks — polish and tests (medium) — owner: frontend/backend
@@ -291,7 +288,7 @@ The sections below are written for contributors: each item includes a short desc
   - 🗑️ Delete (was just icon)
 - **Modal Fixes**: ✅ All modals now properly handle click events and close correctly:
   - Added `e.stopPropagation()` to all modal close buttons to prevent overlay click-through
-  - Converted `OneOffTaskModal` to use React Portals for proper stacking
+  - `TaskModal` uses React Portals for proper stacking
   - All modals tested and verified to open/close correctly
 - **Delete Task Functionality**: ✅ New `DeleteTaskModal` provides granular delete options:
   - Delete just this occurrence (single instance)
@@ -330,7 +327,7 @@ The sections below are written for contributors: each item includes a short desc
 		- ✅ "Edit Task" button functionality tested and working
 		- ✅ All buttons have proper tooltips or aria-labels
 	- **Modal Functionality:**
-		- ✅ All modals open and close correctly (Settings, Sync, Action Log, Edit Task, Add Child, Edit Child, One-Off Task, Wallet Pay, Confirmation, Alert, Delete Task)
+		- ✅ All modals open and close correctly (Settings, Sync, Action Log, Edit Task, Add Child, Edit Child, Wallet Pay, Confirmation, Alert, Delete Task)
 		- ✅ Modal overlay click handling fixed (stopPropagation on close buttons)
 		- ✅ Modal stacking issues resolved (React Portals used where needed)
 	- **Task Deletion:**
