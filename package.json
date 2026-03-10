@@ -7,6 +7,7 @@
     "build": "next build --turbopack",
     "postbuild": "rm -rf docs && cp -r out docs",
     "start": "next start",
+    "serve": "rm -rf .serve-root && mkdir -p .serve-root/family-chores && cp -r docs/* .serve-root/family-chores/ && npx serve .serve-root -p 3999",
     "lint": "eslint",
     "test": "jest"
   },

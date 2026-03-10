@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local static serve (npm run serve)
+.serve-root
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
