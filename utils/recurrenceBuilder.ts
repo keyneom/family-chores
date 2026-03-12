@@ -135,13 +135,19 @@ function formatTimeLabel(time?: string): string | null {
 }
 
 export function deriveDueTimeFromCron(expr: string): string | undefined {
-  const parts = parseCronExpression(expr);
-  const minute = getSingleCronValue(parts.minute);
-  const hour = getSingleCronValue(parts.hour);
-  if (hour === null || minute === null) return undefined;
-  const safeHour = Math.min(23, Math.max(0, hour));
-  const safeMinute = Math.min(59, Math.max(0, minute));
-  return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
+  // parseCronExpression throws on malformed expressions; callers should not crash
+  try {
+    const parts = parseCronExpression(expr);
+    const minute = getSingleCronValue(parts.minute);
+    const hour = getSingleCronValue(parts.hour);
+    if (hour === null || minute === null) return undefined;
+    const safeHour = Math.min(23, Math.max(0, hour));
+    const safeMinute = Math.min(59, Math.max(0, minute));
+    return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
+  } catch {
+    // invalid syntax -> no due time can be derived
+    return undefined;
+  }
 }
 
 function describeCronExpression(expr: string, timezone?: string): string | null {
@@ -289,6 +295,15 @@ function combineDateAndTime(date: string, time?: string): string {
     0
   );
   return getLocalDateTimeString(base);
+}
+
+export function isValidCronExpression(expr: string): boolean {
+  try {
+    parseCronExpression(expr);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseCronExpression(expr: string): CronParts {

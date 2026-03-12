@@ -5,6 +5,7 @@ import {
   buildCronExpressionFromRule,
   getNextOccurrences,
   deriveDueTimeFromCron,
+  isValidCronExpression,
 } from '../utils/recurrenceBuilder';
 import type { ScheduleDefinition, RecurrenceRule } from '../types/task';
 
@@ -93,5 +94,16 @@ describe('recurrenceBuilder utilities', () => {
   it('derives dueTime from simple cron expressions', () => {
     expect(deriveDueTimeFromCron('0 17 * * *')).toBe('17:00');
     expect(deriveDueTimeFromCron('30 6 * * *')).toBe('06:30');
+  });
+
+  it('returns undefined for malformed cron expressions', () => {
+    expect(deriveDueTimeFromCron('0 * * *')).toBeUndefined(); // missing field
+    expect(deriveDueTimeFromCron('')).toBeUndefined();
+  });
+
+  it('validates cron syntax', () => {
+    expect(isValidCronExpression('0 17 * * *')).toBe(true);
+    expect(isValidCronExpression('0 * * *')).toBe(false);
+    expect(isValidCronExpression('invalid')).toBe(false);
   });
 });

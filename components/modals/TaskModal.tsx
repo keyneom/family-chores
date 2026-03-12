@@ -13,7 +13,7 @@ import type {
   TaskAssignmentSettings,
   Weekday,
 } from "../../types/task";
-import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule, deriveDueTimeFromCron } from "../../utils/recurrenceBuilder";
+import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule, deriveDueTimeFromCron, isValidCronExpression } from "../../utils/recurrenceBuilder";
 import { getTheoreticalAssignment } from "../../utils/projectionUtils";
 import { computeDueAt } from "../../utils/taskInstanceGeneration";
 import { getLocalDateTimeString, getLocalDateString } from "../../utils/dateUtils";
@@ -238,6 +238,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       }
     }
   }, [editOption, editInstanceId, state.taskInstances]);
+
+  const cronValid = useMemo(() => isValidCronExpression(cronExpression.trim()), [cronExpression]);
 
   const schedulePreviewDefinition = useMemo(() => {
     if (type === 'oneoff') return undefined;
@@ -961,6 +963,11 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                       onChange={e => setCronExpression(e.target.value)}
                       placeholder="0 17 * * *"
                     />
+                    {!cronValid && cronExpression.trim().length > 0 && (
+                      <p className="helper-text" style={{ color: 'red' }}>
+                        Invalid cron expression
+                      </p>
+                    )}
                   </label>
                 ) : (
                   <>
@@ -1241,6 +1248,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
             form="task-form"
             className="btn btn-primary"
             data-tour="task-submit-button"
+            disabled={useCron && !cronValid}
+            title={useCron && !cronValid ? 'Fix the cron expression before saving' : undefined}
           >
             {editingId ? 'Save' : 'Create'}
           </button>
@@ -1290,6 +1299,10 @@ function buildSchedulePayload(values: ScheduleFormValues): ScheduleDefinition | 
   if (values.useCron) {
     const expr = values.cronExpression.trim();
     if (!expr) return undefined;
+    // guard against garbage input; deriveDueTimeFromCron never throws now.
+    if (!isValidCronExpression(expr)) {
+      return undefined;
+    }
     const derivedDueTime = deriveDueTimeFromCron(expr);
     return {
       cronExpression: expr,
