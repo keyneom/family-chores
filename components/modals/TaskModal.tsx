@@ -243,20 +243,25 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
   const schedulePreviewDefinition = useMemo(() => {
     if (type === 'oneoff') return undefined;
-    return buildSchedulePayload({
-      useCron,
-      cronExpression,
-      frequency,
-      interval,
-      selectedWeekdays,
-      selectedMonthDay,
-      timeOfDay,
-      startDate,
-      timezone,
-      endMode,
-      endDate,
-      occurrenceCount,
-    });
+    try {
+      return buildSchedulePayload({
+        useCron,
+        cronExpression,
+        frequency,
+        interval,
+        selectedWeekdays,
+        selectedMonthDay,
+        timeOfDay,
+        startDate,
+        timezone,
+        endMode,
+        endDate,
+        occurrenceCount,
+      });
+    } catch {
+      // guard against any unexpected parse errors during live editing
+      return undefined;
+    }
   }, [
     type,
     useCron,
@@ -372,26 +377,30 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   };
 
   const handleGenerateCron = () => {
-    const schedule = buildSchedulePayload({
-      useCron: false,
-      cronExpression,
-      frequency,
-      interval,
-      selectedWeekdays,
-      selectedMonthDay,
-      timeOfDay,
-      startDate,
-      timezone,
-      endMode,
-      endDate,
-      occurrenceCount,
-    });
-    if (schedule?.rule) {
-      const cron = buildCronExpressionFromRule(schedule.rule);
-      if (cron) {
-        setCronExpression(cron);
-        setUseCron(true);
+    try {
+      const schedule = buildSchedulePayload({
+        useCron: false,
+        cronExpression,
+        frequency,
+        interval,
+        selectedWeekdays,
+        selectedMonthDay,
+        timeOfDay,
+        startDate,
+        timezone,
+        endMode,
+        endDate,
+        occurrenceCount,
+      });
+      if (schedule?.rule) {
+        const cron = buildCronExpressionFromRule(schedule.rule);
+        if (cron) {
+          setCronExpression(cron);
+          setUseCron(true);
+        }
       }
+    } catch {
+      // defensive; should never happen
     }
   };
 

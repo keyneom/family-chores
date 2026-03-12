@@ -21,9 +21,14 @@ export function doesScheduleRunOnDate(schedule: ScheduleDefinition, date: string
   if (schedule.includeDates?.includes(date)) return true;
   if (schedule.excludeDates?.includes(date)) return false;
   if (schedule.cronExpression) {
-    const cron = parseCronExpression(schedule.cronExpression);
-    const targetDate = new Date(`${date}T00:00:00`);
-    return cronMatchesDateIgnoringTime(cron, targetDate);
+    try {
+      const cron = parseCronExpression(schedule.cronExpression);
+      const targetDate = new Date(`${date}T00:00:00`);
+      return cronMatchesDateIgnoringTime(cron, targetDate);
+    } catch {
+      // invalid cron should be treated as "never runs" rather than crash
+      return false;
+    }
   }
 
   if (schedule.rule) {
@@ -298,6 +303,10 @@ function combineDateAndTime(date: string, time?: string): string {
 }
 
 export function isValidCronExpression(expr: string): boolean {
+  // simple format check: five space-separated fields, each either *, */n or numbers
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  // fallback to parse for deeper validation, but protect ourselves
   try {
     parseCronExpression(expr);
     return true;

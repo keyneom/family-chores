@@ -106,4 +106,10 @@ describe('recurrenceBuilder utilities', () => {
     expect(isValidCronExpression('0 * * *')).toBe(false);
     expect(isValidCronExpression('invalid')).toBe(false);
   });
+
+  it('doesScheduleRunOnDate returns false for malformed cron', () => {
+    const schedule = { cronExpression: '0  * * *' } as any;
+    expect(() => doesScheduleRunOnDate(schedule, '2024-01-01')).not.toThrow();
+    expect(doesScheduleRunOnDate(schedule, '2024-01-01')).toBe(false);
+  });
 });
