@@ -15,7 +15,7 @@ import Task, {
 import ActionLogEntry from "../types/actionLog";
 import { parseTaskKey } from "../utils/taskKey";
 import { deriveDueTimeFromCron } from "../utils/recurrenceBuilder";
-import { getLocalDateTimeString } from "../utils/dateUtils";
+import { getLocalDateTimeString, parseLocalDate } from "../utils/dateUtils";
 
 // Legacy shapes used when reading old saved state
 interface LegacyChore {
@@ -343,6 +343,7 @@ function normalizeRecurrenceRule(rule: RecurrenceRule, task: Task): RecurrenceRu
     excludeDates,
     includeDates,
     end,
+    byWeekday: rule.byWeekday || (rule.frequency === 'weekly' ? [parseLocalDate(startDate).getDay() as Weekday] : undefined),
   };
 }
 

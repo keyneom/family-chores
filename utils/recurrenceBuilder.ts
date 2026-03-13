@@ -40,7 +40,10 @@ export function doesScheduleRunOnDate(schedule: ScheduleDefinition, date: string
 
 export function getNextOccurrences(schedule: ScheduleDefinition, startDate: string, count = 5): string[] {
   const occurrences: string[] = [];
-  let cursor = new Date(`${startDate}T00:00:00`);
+  // For cron expressions, start from a fixed past date to ensure consistent ordering
+  // For rules, use the provided startDate
+  const effectiveStartDate = schedule.cronExpression ? '2000-01-01' : startDate;
+  let cursor = new Date(`${effectiveStartDate}T00:00:00`);
   let attempts = 0;
   const maxAttempts = 365; // safeguard
 
