@@ -9,7 +9,9 @@
     "start": "next start",
     "serve": "rm -rf .serve-root && mkdir -p .serve-root/family-chores && cp -r docs/* .serve-root/family-chores/ && npx serve .serve-root -p 3999",
     "lint": "eslint",
-    "test": "jest"
+    "test": "jest",
+    "test:smoke": "jest tests/smoke",
+    "test:e2e:smoke": "playwright test e2e/smoke"
   },
   "dependencies": {
     "@types/pako": "^2.0.4",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",

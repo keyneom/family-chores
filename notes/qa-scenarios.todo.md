@@ -50,6 +50,7 @@ Date: 2026-01-28
 - Add name/id on inputs + label associations to clear a11y warnings; wrap PIN inputs in form or suppress validation appropriately.
 
 ## Next scenarios to run
+- [meta] Test harness guard: fail fast if browser starts on any URL other than `http://localhost:3000/family-chores`; do not execute smoke steps on root or alternate paths.
 - Delete task (single occurrence vs future vs template) and verify projections update.
 - One-off task with past date: ensure not shown in Today/Scheduled.
 - Recurring task with end date “After N occurrences” and “On date” (ensure projection count capped).
@@ -112,4 +113,54 @@ Date: 2026-01-28
 ### Action log
 - Ben “Log” opens action log modal listing recent events with JSON payloads.
 - Export JSON/CSV buttons clicked; no visible confirmation/toast that download started/completed.
+
+---
+
+## Comprehensive smoke execution (2026-04-21)
+
+### Canonical path guard
+- All smoke execution is now pinned to `http://localhost:3000/family-chores`.
+- Any run starting on root (`http://localhost:3000/`) is treated as setup failure.
+
+### Automated smoke results
+- `npm run test:smoke`: PASS (3/3 suites, 9/9 tests).
+- `npm run test:e2e:smoke`: PASS (4/4 specs).
+- Notes:
+  - E2E specs were stabilized for deterministic pathing and reduced flake.
+  - E2E now covers onboarding visibility, core global controls, sync empty-import guard, and approval settings save path.
+
+### Manual browser smoke (non-automated paths)
+
+#### Passed
+- Reset flow (`localStorage.clear` + reload) restores fresh state.
+- Settings -> Reset All Data confirmation dialog behavior.
+- Edit Child -> Delete confirmation dialog behavior.
+- Recurring task edit scope options (`instance` / `future` / `template`) are shown with expected labels.
+- Recurring task delete scope options (`instance` / `future` / `template`) are shown with expected labels.
+- Sync malformed JSON import shows user-facing error message and keeps modal interactive.
+- Wallet pay guard path for zero-balance child shows blocking alert.
+- Action log modal opens and export JSON/CSV controls are clickable.
+
+#### Failed
+- No blocking failures observed in this focused manual run.
+
+#### Console/runtime observations
+- Dev-mode only console noise observed (HMR/hydration warnings).
+- No app-crash blocker found in the executed manual paths.
+
+### Additional testing pass (2026-04-21, continued)
+
+#### Automated expansion results
+- `npm run test:smoke`: PASS (6/6 suites, 16/16 tests).
+  - includes new coverage:
+    - approval action matrix (`complete`, `earlyComplete`, `taskMove`, `editTasks`, `deleteTasks`)
+    - timed outcomes matrix (on-time, late, approve vs forgive, auto-approve)
+    - rotation matrix (7-day explicit order + reorder + linked offset checks)
+- `npm test -- tests/taskAssignment.test.ts`: PASS (6/6 tests).
+- `npm run test:e2e:smoke`: PASS (4/4 specs).
+
+#### Manual harness caveat
+- During deeper browser-tool manual continuation, a harness-level issue was observed where modal content appeared in accessibility snapshots but not visually in screenshots.
+- Because this prevented reliable manual confirmation of some modal-heavy branches, critical rotation/approval/timed correctness was continued and validated via deterministic automated coverage above.
+- Treat this as a testing-harness risk item (not yet confirmed as app runtime bug) and re-run affected manual scenarios after harness behavior is stable.
 
