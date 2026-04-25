@@ -458,6 +458,8 @@ function buildRotationSettings(
   const mode =
     assignmentSettings.strategy === "simultaneous"
       ? "simultaneous"
+      : assignmentSettings.strategy === "round_robin" || task.rotation?.linkedTaskId
+      ? "round-robin"
       : assignmentSettings.childIds.length > 1
       ? "round-robin"
       : "single-child";

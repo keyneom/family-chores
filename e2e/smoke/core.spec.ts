@@ -1,32 +1,30 @@
 import { expect, test } from '@playwright/test';
+import { APP_URL, expectFamilyChoresApp, setAppState } from './helpers';
 
 async function resetState(page: import('@playwright/test').Page, disableTour = false) {
-  await page.goto('/');
+  await page.goto(APP_URL);
   await page.evaluate(() => localStorage.clear());
   if (disableTour) {
-    await page.evaluate(() => {
-      localStorage.setItem(
-        'choresAppState',
-        JSON.stringify({
-          children: [],
-          tasks: [],
-          taskInstances: [],
-          parentSettings: {
-            approvals: { taskMove: false, earlyComplete: false, taskComplete: false, editTasks: false },
-            childDisplayOrder: [],
-            timedAutoApproveDefault: false,
-            onboardingCompleted: true,
-            pins: [{ handle: 'Parent', pinHash: 'hash', salt: 'salt' }],
-          },
-          completedTasks: {},
-          timers: {},
-          timedCompletions: [],
-          actionLog: [],
-        }),
-      );
+    await setAppState(page, {
+      children: [],
+      tasks: [],
+      taskInstances: [],
+      parentSettings: {
+        approvals: { taskMove: false, earlyComplete: false, taskComplete: false, editTasks: false },
+        childDisplayOrder: [],
+        timedAutoApproveDefault: false,
+        onboardingCompleted: true,
+        pins: [{ handle: 'Parent', pinHash: 'hash', salt: 'salt' }],
+      },
+      completedTasks: {},
+      timers: {},
+      timedCompletions: [],
+      actionLog: [],
     });
+    return;
   }
-  await page.goto('/');
+  await page.goto(APP_URL);
+  await expectFamilyChoresApp(page);
 }
 
 async function skipTourIfVisible(page: import('@playwright/test').Page) {
@@ -39,6 +37,7 @@ async function skipTourIfVisible(page: import('@playwright/test').Page) {
 test.describe('Smoke: core flows', () => {
   test('onboarding appears in fresh state and can be skipped', async ({ page }) => {
     await resetState(page);
+    await expect(page.getByText('No children configured')).toBeVisible();
     await expect(page.getByText('Welcome to Family Chores')).toBeVisible();
     await page.getByRole('button', { name: 'Skip Tour' }).click();
     await expect(page.getByRole('button', { name: '⚙️ Settings' })).toBeVisible();
@@ -46,6 +45,7 @@ test.describe('Smoke: core flows', () => {
 
   test('global add-child and add-task controls open correctly', async ({ page }) => {
     await resetState(page, true);
+    await expect(page.getByText('No children configured')).toBeVisible();
 
     await page.getByRole('button', { name: '+ Add Child' }).click();
     await expect(page.getByRole('heading', { name: 'Add Child' })).toBeVisible();

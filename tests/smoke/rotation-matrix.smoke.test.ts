@@ -1,5 +1,7 @@
 import type { Task } from '../../types/task';
+import { choresAppReducer } from '../../components/ChoresAppContext';
 import { getTheoreticalAssignment } from '../../utils/projectionUtils';
+import { makeBaseState } from './helpers';
 
 function makeRotatingTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -100,6 +102,94 @@ describe('Smoke: rotation matrix correctness', () => {
       expect(assignB).toHaveLength(1);
       expect(assignA[0].childId).toBe(expectedA[index]);
       expect(assignB[0].childId).toBe(expectedB[index]);
+    });
+  });
+
+  it('keeps reducer-normalized linked rotations visible when they inherit children from anchor task', () => {
+    const baseState = makeBaseState({
+      children: [
+        { id: 1, name: 'Ava', stars: 0, money: 0 },
+        { id: 2, name: 'Ben', stars: 0, money: 0 },
+        { id: 3, name: 'Noah', stars: 0, money: 0 },
+        { id: 4, name: 'Mia', stars: 0, money: 0 },
+      ],
+    });
+
+    const anchor = makeRotatingTask({
+      id: 'anchor',
+      title: 'Anchor skips fourth child',
+      assignedChildIds: [1, 2, 3],
+      assignment: {
+        strategy: 'round_robin',
+        childIds: [1, 2, 3],
+        rotationStartDate: '2026-04-21',
+      },
+      rotation: {
+        mode: 'round-robin',
+        assignedChildIds: [1, 2, 3],
+        rotationOrder: [1, 3, 2],
+        startDate: '2026-04-21',
+      },
+    });
+
+    // This mirrors TaskModal's linked-task payload: no local child IDs because
+    // the follower reads the rotation order from the anchor task.
+    const linkedPositive = makeRotatingTask({
+      id: 'linked_positive',
+      title: 'Linked positive offset',
+      assignedChildIds: [],
+      assignment: {
+        strategy: 'round_robin',
+        childIds: [],
+        rotationStartDate: '2026-04-21',
+      },
+      rotation: {
+        mode: 'round-robin',
+        assignedChildIds: [],
+        linkedTaskId: 'anchor',
+        linkedTaskOffset: 1,
+        startDate: '2026-04-21',
+      },
+    });
+
+    const linkedNegative = makeRotatingTask({
+      id: 'linked_negative',
+      title: 'Linked negative offset',
+      assignedChildIds: [],
+      assignment: {
+        strategy: 'round_robin',
+        childIds: [],
+        rotationStartDate: '2026-04-21',
+      },
+      rotation: {
+        mode: 'round-robin',
+        assignedChildIds: [],
+        linkedTaskId: 'anchor',
+        linkedTaskOffset: -1,
+        startDate: '2026-04-21',
+      },
+    });
+
+    let state = choresAppReducer(baseState, { type: 'ADD_TASK', payload: anchor });
+    state = choresAppReducer(state, { type: 'ADD_TASK', payload: linkedPositive });
+    state = choresAppReducer(state, { type: 'ADD_TASK', payload: linkedNegative });
+
+    const normalizedAnchor = state.tasks.find((task) => task.id === 'anchor') as Task;
+    const normalizedPositive = state.tasks.find((task) => task.id === 'linked_positive') as Task;
+    const normalizedNegative = state.tasks.find((task) => task.id === 'linked_negative') as Task;
+
+    expect(normalizedPositive.rotation?.mode).toBe('round-robin');
+    expect(normalizedNegative.rotation?.mode).toBe('round-robin');
+
+    const dates = ['2026-04-21', '2026-04-22', '2026-04-23'];
+    const expectedAnchor = [1, 3, 2];
+    const expectedPositive = [3, 2, 1];
+    const expectedNegative = [2, 1, 3];
+
+    dates.forEach((date, index) => {
+      expect(getTheoreticalAssignment(normalizedAnchor, date, state.tasks)[0]?.childId).toBe(expectedAnchor[index]);
+      expect(getTheoreticalAssignment(normalizedPositive, date, state.tasks)[0]?.childId).toBe(expectedPositive[index]);
+      expect(getTheoreticalAssignment(normalizedNegative, date, state.tasks)[0]?.childId).toBe(expectedNegative[index]);
     });
   });
 });
