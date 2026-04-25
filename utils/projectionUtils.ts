@@ -26,6 +26,55 @@ export interface ProjectedAssignment {
   rotationIndex: number;
 }
 
+/** True when each assigned child has their own instance per day (not a single shared slot). */
+export function isSimultaneousTask(task: Task): boolean {
+  return (
+    task.rotation?.mode === 'simultaneous' ||
+    task.assignment?.strategy === 'simultaneous'
+  );
+}
+
+/**
+ * Whether a realized task instance already exists such that we should not show a projected
+ * copy for this child on this date. For simultaneous tasks, only this child's instance blocks
+ * their projection; for round-robin/single, any child's instance for that template+date blocks all.
+ */
+export function hasBlockingRealizedInstanceForTheoreticalProjection(
+  task: Task,
+  date: string,
+  childId: number,
+  instanceByTemplateDate: Map<string, TaskInstance>,
+  instanceByTemplateDateChild: Map<string, TaskInstance>,
+): boolean {
+  if (isSimultaneousTask(task)) {
+    return instanceByTemplateDateChild.has(`${task.id}|${childId}|${date}`);
+  }
+  return instanceByTemplateDate.has(`${task.id}|${date}`);
+}
+
+export type UpcomingProjectionResolution = 'show-realized' | 'skip-child' | 'project-theoretical';
+
+/**
+ * For the upcoming-tasks list: decide if this child sees a realized row, nothing, or a projection.
+ */
+export function resolveUpcomingSlotForChild(
+  task: Task,
+  dateStr: string,
+  childId: number,
+  instanceByTemplateDate: Map<string, TaskInstance>,
+  instanceByTemplateDateChild: Map<string, TaskInstance>,
+): UpcomingProjectionResolution {
+  if (isSimultaneousTask(task)) {
+    return instanceByTemplateDateChild.has(`${task.id}|${childId}|${dateStr}`)
+      ? 'show-realized'
+      : 'project-theoretical';
+  }
+  const inst = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
+  if (!inst) return 'project-theoretical';
+  if (inst.childId === childId) return 'show-realized';
+  return 'skip-child';
+}
+
 /**
  * Projects which child SHOULD be assigned to a task on a specific date based on the rules.
  * This is a pure calculation (O(1) or O(chain_length)) and does not access the DB.

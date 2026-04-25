@@ -5,7 +5,12 @@ import { Task, TaskInstance } from "../types/task";
 import type { TimedCompletion } from "../types/task";
 import { useModalControl } from "./ModalControlContext";
 import { getTemplateForInstance, computeDueAt } from "../utils/taskInstanceGeneration";
-import { getTheoreticalAssignment } from "../utils/projectionUtils";
+import {
+  getTheoreticalAssignment,
+  hasBlockingRealizedInstanceForTheoreticalProjection,
+  isSimultaneousTask,
+  resolveUpcomingSlotForChild,
+} from "../utils/projectionUtils";
 import { getTodayString, getLocalDateString } from "../utils/dateUtils";
 import { buildTaskKey } from "../utils/taskKey";
 import { requiresPin, hasApprovers } from "../utils/approvalUtils";
@@ -36,7 +41,11 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   const [earlyCompleteAlertOpen, setEarlyCompleteAlertOpen] = React.useState(false);
   const [pendingEarlyCompletion, setPendingEarlyCompletion] = React.useState<{ task: Task; date: string } | null>(null);
   const [dragDropConfirmOpen, setDragDropConfirmOpen] = React.useState(false);
-  const [pendingDragDrop, setPendingDragDrop] = React.useState<{ task: Task; instanceDate: string } | null>(null);
+  const [pendingDragDrop, setPendingDragDrop] = React.useState<{
+    task: Task;
+    instanceDate: string;
+    sourceChildId?: number;
+  } | null>(null);
   const [pendingDragDropActor, setPendingDragDropActor] = React.useState<string | undefined>(undefined);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [pendingDelete, setPendingDelete] = React.useState<{ task: Task; date: string } | null>(null);
@@ -87,7 +96,11 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           return;
         }
         // Store the move action and request PIN
-        setPendingDragDrop({ task, instanceDate: instanceDate || getTodayString() });
+        setPendingDragDrop({
+          task,
+          instanceDate: instanceDate || getTodayString(),
+          sourceChildId,
+        });
         setPinOpen(true);
         return;
       }
@@ -96,21 +109,36 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       // Check if task has rotation
       if (task.rotation?.mode === 'round-robin') {
         // Show confirmation modal for rotating tasks
-        setPendingDragDrop({ task, instanceDate: instanceDate || getTodayString() });
+        setPendingDragDrop({
+          task,
+          instanceDate: instanceDate || getTodayString(),
+          sourceChildId,
+        });
         setDragDropConfirmOpen(true);
       } else {
         // For non-rotating tasks, move just this instance
-        handleMoveInstance(task, instanceDate || getTodayString());
+        handleMoveInstance(task, instanceDate || getTodayString(), undefined, sourceChildId);
       }
     } catch (error) {
       console.error('Drop error:', error);
     }
   };
 
-  const handleMoveInstance = (task: Task, instanceDate: string, actorHandle?: string) => {
+  const handleMoveInstance = (
+    task: Task,
+    instanceDate: string,
+    actorHandle?: string,
+    sourceChildId?: number,
+  ) => {
     // Find the instance for this date - ensure we only find instances for THIS specific task
     const dateStr = instanceDate.split('T')[0];
-    const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
+    let existingInstance: TaskInstance | undefined;
+    if (isSimultaneousTask(task) && typeof sourceChildId === 'number') {
+      existingInstance = instanceByTemplateDateChild.get(`${task.id}|${sourceChildId}|${dateStr}`);
+    }
+    if (!existingInstance) {
+      existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
+    }
     
     if (existingInstance) {
       // Update ONLY this specific instance's childId
@@ -179,10 +207,10 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   const handleDragDropConfirm = (option: DragDropOption) => {
     if (!pendingDragDrop) return;
     
-    const { task, instanceDate } = pendingDragDrop;
+    const { task, instanceDate, sourceChildId } = pendingDragDrop;
     
     if (option === 'instance') {
-      handleMoveInstance(task, instanceDate, pendingDragDropActor);
+      handleMoveInstance(task, instanceDate, pendingDragDropActor, sourceChildId);
     } else if (option === 'redo-rotations') {
       handleRedoRotations(task, pendingDragDropActor);
     }
@@ -265,11 +293,18 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     
     state.tasks.forEach(task => {
         if (!task.enabled) return;
-        // Check if a realized instance exists for this task on this date (ANY child)
-        const existingInstance = instanceByTemplateDate.get(`${task.id}|${today}`);
-        
-        // If realized instance exists, the "wave has collapsed" - do not project
-        if (existingInstance) return;
+        // If a blocking realized instance exists for this child (or globally for non-simultaneous), do not project
+        if (
+          hasBlockingRealizedInstanceForTheoreticalProjection(
+            task,
+            today,
+            child.id,
+            instanceByTemplateDate,
+            instanceByTemplateDateChild,
+          )
+        ) {
+          return;
+        }
 
         // Calculate projection
         // We pass ALL tasks because Linked Tasks need to look up their parents
@@ -303,7 +338,15 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     });
     
     return projected;
-  }, [state.tasks, state.taskInstances, today, child.id, mounted]);
+  }, [
+    state.tasks,
+    state.taskInstances,
+    today,
+    child.id,
+    mounted,
+    instanceByTemplateDate,
+    instanceByTemplateDateChild,
+  ]);
 
   
   // Build renderable tasks from Realized instances
@@ -394,23 +437,24 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         state.tasks.forEach(task => {
             if (!task.enabled) return;
             
-            // Check for REALIZED instance first (e.g. rescheduled to future)
-            const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
-            
-            if (existingInstance) {
-                // If it exists and assigned to THIS child, show it
-                if (existingInstance.childId === child.id) {
-                    upcoming.push({ 
-                        task, 
-                        dateTime: `${dateStr}T${task.schedule?.dueTime || "00:00"}`, 
-                        date: dateStr 
-                    });
-                }
-                // If exists but assigned to another child, skip
+            const upcomingSlot = resolveUpcomingSlotForChild(
+              task,
+              dateStr,
+              child.id,
+              instanceByTemplateDate,
+              instanceByTemplateDateChild,
+            );
+            if (upcomingSlot === 'skip-child') return;
+            if (upcomingSlot === 'show-realized') {
+                upcoming.push({
+                  task,
+                  dateTime: `${dateStr}T${task.schedule?.dueTime || "00:00"}`,
+                  date: dateStr,
+                });
                 return;
             }
-            
-            // No realized instance -> Project it
+
+            // No blocking realized row for this child -> project if assigned
             const assignments = getTheoreticalAssignment(task, dateStr, state.tasks);
             const myAssignment = assignments.find(a => a.childId === child.id);
             
@@ -431,7 +475,16 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     
     // Limit to 5 initially, or show all if "see more" is clicked
     return showAllUpcoming ? sorted : sorted.slice(0, 5);
-  }, [state.tasks, state.taskInstances, child.id, today, mounted, showAllUpcoming]);
+  }, [
+    state.tasks,
+    state.taskInstances,
+    child.id,
+    today,
+    mounted,
+    showAllUpcoming,
+    instanceByTemplateDate,
+    instanceByTemplateDateChild,
+  ]);
   
   // Calculate total count for "See more" button
   const totalUpcomingCount = useMemo(() => {
@@ -454,11 +507,16 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       
       state.tasks.forEach(task => {
         if (!task.enabled) return;
-        const existingInstance = instanceByTemplateDate.get(`${task.id}|${dateStr}`);
-        
-        if (existingInstance) {
-          if (existingInstance.childId === child.id) count++;
-        } else {
+        const slot = resolveUpcomingSlotForChild(
+          task,
+          dateStr,
+          child.id,
+          instanceByTemplateDate,
+          instanceByTemplateDateChild,
+        );
+        if (slot === 'show-realized') {
+          count++;
+        } else if (slot === 'project-theoretical') {
           const assignments = getTheoreticalAssignment(task, dateStr, state.tasks);
           if (assignments.some(a => a.childId === child.id)) count++;
         }
@@ -468,7 +526,15 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
     }
     
     return count;
-  }, [state.tasks, state.taskInstances, child.id, today, mounted]);
+  }, [
+    state.tasks,
+    state.taskInstances,
+    child.id,
+    today,
+    mounted,
+    instanceByTemplateDate,
+    instanceByTemplateDateChild,
+  ]);
   
   const hasMoreUpcoming = totalUpcomingCount > 5;
 
@@ -584,7 +650,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
       setPendingEarlyCompletion(null);
     } else if (pendingDragDrop) {
       // Approval granted for drag-and-drop, proceed with move
-      const { task, instanceDate } = pendingDragDrop;
+      const { task, instanceDate, sourceChildId } = pendingDragDrop;
       // Check if task has rotation
       if (task.rotation?.mode === 'round-robin') {
         // Show confirmation modal for rotating tasks
@@ -592,7 +658,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         setDragDropConfirmOpen(true);
       } else {
         // For non-rotating tasks, move just this instance
-        handleMoveInstance(task, instanceDate, actorHandle);
+        handleMoveInstance(task, instanceDate, actorHandle, sourceChildId);
         setPendingDragDrop(null);
       }
     } else if (pendingDelete && pendingDeleteOption) {
