@@ -692,20 +692,16 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         <div className="child-name-row">
           <span className="child-name">{child.name}</span>
           <div className="child-header-actions">
-            <button className="btn-icon-text" onClick={() => openEditChildModal(child.id)} title="Edit child">
-              <span className="btn-icon">✏️</span>
+            <button type="button" className="btn-icon-text" onClick={() => openEditChildModal(child.id)} title="Edit child">
               <span className="btn-text">Edit</span>
             </button>
-            <button className="btn-icon-text" onClick={handlePayChild} title="Pay out cash">
-              <span className="btn-icon">💵</span>
+            <button type="button" className="btn-icon-text" onClick={handlePayChild} title="Pay out cash">
               <span className="btn-text">Pay</span>
             </button>
-            <button className="btn-icon-text" onClick={handlePayOnChain} title="Pay on blockchain">
-              <span className="btn-icon">🌐</span>
+            <button type="button" className="btn-icon-text" onClick={handlePayOnChain} title="Pay on blockchain">
               <span className="btn-text">Wallet</span>
             </button>
-            <button className="btn-icon-text" onClick={() => setLogOpen(true)} title="View action log">
-              <span className="btn-icon">📝</span>
+            <button type="button" className="btn-icon-text" onClick={() => setLogOpen(true)} title="View action log">
               <span className="btn-text">Log</span>
             </button>
           </div>

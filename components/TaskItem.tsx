@@ -469,23 +469,22 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           )
         )}
         <button
-          className="btn-icon-text btn-edit"
+          className="task-icon-btn btn-edit"
           onClick={handleEdit}
           title={`Edit task: ${displayTitle}`}
           aria-label={`Edit task: ${displayTitle}`}
           data-task-id={normalized.id}
           data-task-title={displayTitle}
         >
-          <span className="btn-icon">✏️</span>
-          <span className="btn-text">Edit</span>
+          <span className="task-icon-btn-icon" aria-hidden="true">✏️</span>
         </button>
         <button
-          className="btn-icon-text btn-danger"
+          className="task-icon-btn btn-danger"
           onClick={handleDelete}
           title="Delete task"
+          aria-label={`Delete task: ${displayTitle}`}
         >
-          <span className="btn-icon">🗑️</span>
-          <span className="btn-text">Delete</span>
+          <span className="task-icon-btn-icon" aria-hidden="true">🗑️</span>
         </button>
         <PinModal 
           open={pinOpen} 

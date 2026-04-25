@@ -347,6 +347,7 @@ header h1 {
   box-shadow: var(--shadow-sm);
   border: 1px solid rgba(0, 0, 0, 0.08);
   position: relative;
+  overflow-x: hidden;
 }
 
 @media (min-width: 1400px) {
@@ -809,14 +810,19 @@ header h1 {
   margin-bottom: 20px;
   padding-bottom: 15px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .child-name-row {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .child-name {
@@ -824,19 +830,27 @@ header h1 {
   font-weight: 600;
   color: var(--text);
   text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .child-header-actions {
   display: flex;
-  gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   justify-content: center;
-  min-width: 0; /* Allow flex items to shrink below their content size */
+  align-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .btn-icon-text {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   background: #404040;
   color: #ffffff;
@@ -847,8 +861,9 @@ header h1 {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
-  flex-shrink: 1; /* Allow buttons to shrink */
-  min-width: 0; /* Allow flex items to shrink below their content size */
+  flex-shrink: 1;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .btn-icon-text:hover {
@@ -859,6 +874,7 @@ header h1 {
 .btn-icon-text .btn-icon {
   font-size: 0.85rem;
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .btn-icon-text .btn-text {
@@ -866,7 +882,24 @@ header h1 {
   font-size: 0.72rem;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0; /* Allow text to shrink */
+  min-width: 0;
+}
+
+/* Compact header actions: text-only pills, wrap inside narrow columns */
+.child-header-actions .btn-icon-text {
+  padding: 4px 8px;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  flex: 0 1 auto;
+  max-width: calc(50% - 4px);
+}
+
+.child-header-actions .btn-icon-text .btn-text {
+  font-size: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .child-stats {
@@ -996,22 +1029,26 @@ header h1 {
 .task-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
   justify-content: flex-end;
   width: 100%;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .complete-btn {
-  padding: 8px 14px;
+  padding: 6px 12px;
   border: none;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--brand), #2b9d87);
   color: white;
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   cursor: pointer;
   transition: all 0.2s ease;
   font-weight: 500;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .complete-btn:hover {
@@ -1100,20 +1137,43 @@ header h1 {
   transform: translateY(-1px);
 }
 
-.btn-icon-text.btn-edit {
+.task-icon-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.task-icon-btn-icon {
+  font-size: 0.86rem;
+  line-height: 1;
+}
+
+.task-icon-btn.btn-edit {
   background: #404040;
+  color: #ffffff;
 }
 
-.btn-icon-text.btn-edit:hover {
+.task-icon-btn.btn-edit:hover {
   background: #262626;
+  transform: translateY(-1px);
 }
 
-.btn-icon-text.btn-danger {
+.task-icon-btn.btn-danger {
   background: #d64545;
+  color: #ffffff;
 }
 
-.btn-icon-text.btn-danger:hover {
+.task-icon-btn.btn-danger:hover {
   background: #b63a3a;
+  transform: translateY(-1px);
 }
 
 .payment-controls {
