@@ -12,11 +12,19 @@ import type {
   RecurrenceRule,
   TaskAssignmentSettings,
   Weekday,
+  OverduePolicy,
+  CarryOverPolicy,
+  MoneyPolicyMode,
 } from "../../types/task";
 import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRule, deriveDueTimeFromCron, isValidCronExpression } from "../../utils/recurrenceBuilder";
 import { getTheoreticalAssignment } from "../../utils/projectionUtils";
 import { computeDueAt } from "../../utils/taskInstanceGeneration";
 import { getLocalDateTimeString, getLocalDateString } from "../../utils/dateUtils";
+import {
+  buildMissConsequencePayload,
+  missConsequenceToFormState,
+  taskHasMissConsequenceConfigured,
+} from "../../utils/missConsequenceUtils";
 import { requiresPin, hasApprovers } from "../../utils/approvalUtils";
 import PinModal from "./PinModal";
 import AlertModal from "./AlertModal";
@@ -43,6 +51,47 @@ export interface TaskModalProps {
 }
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** True when saved task data uses non-default overdue, carry-over, miss, or money policy. */
+function taskHasAdvancedPolicy(task: Task): boolean {
+  const overdue = task.overduePolicy ?? 'none';
+  if (overdue !== 'none') return true;
+  const grace = task.graceMinutes ?? 15;
+  if (grace !== 15) return true;
+
+  const carry = task.carryOverPolicy ?? 'carry_none';
+  if (carry !== 'carry_none') return true;
+  const carryMax = task.carryMaxDays ?? 3;
+  if (carryMax !== 3) return true;
+
+  if (taskHasMissConsequenceConfigured(task.missConsequence)) return true;
+
+  const mp = task.moneyPolicy;
+  const mode = mp?.mode ?? 'simple';
+  if (mode !== 'simple') return true;
+
+  const tiers = mp?.tiers ?? [];
+  for (const t of tiers) {
+    if (t.id === 'tier_0_15' && Number(t.value) !== 1) return true;
+    if (t.id === 'tier_15_30' && Number(t.value) !== 0) return true;
+    if (t.id === 'tier_30_plus' && Number(t.value) !== -1) return true;
+  }
+  const rate = mp?.continuous?.ratePerMinuteLate;
+  const minP = mp?.continuous?.minPayout;
+  if (rate !== undefined && Number(rate) !== 0.01) return true;
+  if (minP !== undefined && Number(minP) !== -2) return true;
+
+  const undoneEnabled = Boolean(mp?.undonePenalty?.enabled);
+  if (undoneEnabled) return true;
+  const undone = mp?.undonePenalty?.value;
+  if (undone !== undefined && Number(undone) !== -2) return true;
+
+  if (task.consequenceRules && task.consequenceRules.length > 0) return true;
+
+  if (task.manualCompletionScore) return true;
+
+  return false;
+}
 
 export default function TaskModal({ open, onClose, initialTask = null, onSave, editOption = null, editInstanceId = null, initialDefaults }: TaskModalProps) {
   const { state, dispatch } = useChoresApp();
@@ -76,6 +125,24 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [allowedMinutes, setAllowedMinutes] = useState(5);
   const [latePenaltyPercent, setLatePenaltyPercent] = useState(50);
   const [autoApproveOnStop, setAutoApproveOnStop] = useState(false);
+  const [overduePolicy, setOverduePolicy] = useState<OverduePolicy>('none');
+  const [graceMinutes, setGraceMinutes] = useState(15);
+  const [carryOverPolicy, setCarryOverPolicy] = useState<CarryOverPolicy>('carry_none');
+  const [carryMaxDays, setCarryMaxDays] = useState(3);
+  const [missMoneyPenalty, setMissMoneyPenalty] = useState(0);
+  const [missStarPenalty, setMissStarPenalty] = useState(0);
+  const [missForfeitBaseReward, setMissForfeitBaseReward] = useState(false);
+  const [customConsequenceLabel, setCustomConsequenceLabel] = useState('');
+  const [moneyPolicyMode, setMoneyPolicyMode] = useState<MoneyPolicyMode>('simple');
+  const [tier0to15, setTier0to15] = useState(1);
+  const [tier15to30, setTier15to30] = useState(0);
+  const [tier30plus, setTier30plus] = useState(-1);
+  const [continuousRatePerMinute, setContinuousRatePerMinute] = useState(0.01);
+  const [continuousMinPayout, setContinuousMinPayout] = useState(-2);
+  const [enableUndonePenalty, setEnableUndonePenalty] = useState(false);
+  const [undonePenaltyCutoffMode, setUndonePenaltyCutoffMode] = useState<'next_due' | 'end_of_day' | 'deadline'>('next_due');
+  const [undonePenaltyCutoffAt, setUndonePenaltyCutoffAt] = useState('');
+  const [undonePenaltyValue, setUndonePenaltyValue] = useState(-2);
   const [startDate, setStartDate] = useState(() => getLocalDateString());
   const [timezone, setTimezone] = useState(
     () => (typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC")
@@ -87,6 +154,9 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [pinOpen, setPinOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<{ task?: Task; instance?: TaskInstance } | null>(null);
   const [alertOpen, setAlertOpen] = useState(false);
+  const [showAdvancedPolicy, setShowAdvancedPolicy] = useState(false);
+  const [manualCompletionScore, setManualCompletionScore] = useState(false);
+  const [nonCompletable, setNonCompletable] = useState(false);
 
   useEffect(() => {
     const today = getLocalDateString();
@@ -182,6 +252,31 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       } else {
         setIsTimed(false);
       }
+      setOverduePolicy(initialTask.overduePolicy || 'none');
+      setGraceMinutes(initialTask.graceMinutes || 15);
+      setCarryOverPolicy(initialTask.carryOverPolicy || 'carry_none');
+      setCarryMaxDays(initialTask.carryMaxDays || 3);
+      {
+        const missForm = missConsequenceToFormState(initialTask.missConsequence);
+        setMissMoneyPenalty(missForm.moneyPenalty);
+        setMissStarPenalty(missForm.starPenalty);
+        setMissForfeitBaseReward(missForm.forfeitBaseReward);
+        setCustomConsequenceLabel(missForm.customLabel);
+      }
+      setMoneyPolicyMode(initialTask.moneyPolicy?.mode || 'simple');
+      const loadedTiers = initialTask.moneyPolicy?.tiers || [];
+      setTier0to15(Number(loadedTiers.find(t => t.id === 'tier_0_15')?.value ?? 1));
+      setTier15to30(Number(loadedTiers.find(t => t.id === 'tier_15_30')?.value ?? 0));
+      setTier30plus(Number(loadedTiers.find(t => t.id === 'tier_30_plus')?.value ?? -1));
+      setContinuousRatePerMinute(Number(initialTask.moneyPolicy?.continuous?.ratePerMinuteLate ?? 0.01));
+      setContinuousMinPayout(Number(initialTask.moneyPolicy?.continuous?.minPayout ?? -2));
+      setEnableUndonePenalty(Boolean(initialTask.moneyPolicy?.undonePenalty?.enabled));
+      setUndonePenaltyCutoffMode(initialTask.moneyPolicy?.undonePenalty?.cutoffMode || 'next_due');
+      setUndonePenaltyCutoffAt(initialTask.moneyPolicy?.undonePenalty?.cutoffAt || '');
+      setUndonePenaltyValue(Number(initialTask.moneyPolicy?.undonePenalty?.value ?? -2));
+      setManualCompletionScore(Boolean(initialTask.manualCompletionScore));
+      setNonCompletable(Boolean(initialTask.nonCompletable));
+      setShowAdvancedPolicy(taskHasAdvancedPolicy(initialTask));
     } else {
       // reset
       setEditingId(null);
@@ -198,6 +293,27 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       setRequirePin(false);
       setVoiceAnnouncements(undefined);
       setIsTimed(false); setAllowedMinutes(5); setLatePenaltyPercent(50); setAutoApproveOnStop(false);
+      setOverduePolicy('none');
+      setGraceMinutes(15);
+      setCarryOverPolicy('carry_none');
+      setCarryMaxDays(3);
+      setMissMoneyPenalty(0);
+      setMissStarPenalty(0);
+      setMissForfeitBaseReward(false);
+      setCustomConsequenceLabel('');
+      setMoneyPolicyMode('simple');
+      setTier0to15(1);
+      setTier15to30(0);
+      setTier30plus(-1);
+      setContinuousRatePerMinute(0.01);
+      setContinuousMinPayout(-2);
+      setEnableUndonePenalty(false);
+      setUndonePenaltyCutoffMode('next_due');
+      setUndonePenaltyCutoffAt('');
+      setUndonePenaltyValue(-2);
+      setManualCompletionScore(false);
+      setNonCompletable(false);
+      setShowAdvancedPolicy(false);
       setRotationOrder(defaultRotationOrder);
       setLinkedTaskId(initialDefaults?.linkedTaskId);
       setLinkedTaskOffset(0);
@@ -329,6 +445,13 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
     }
   }, [linkedTaskId]);
 
+  useEffect(() => {
+    if (nonCompletable) {
+      setIsTimed(false);
+      setManualCompletionScore(false);
+    }
+  }, [nonCompletable]);
+
   if (!open || !mounted) return null;
 
   const toggleChildSelection = (childId: number) => {
@@ -432,6 +555,17 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       rotationStartDate,
       allowSimultaneous: rotationMode === 'simultaneous',
     };
+    const undonePenaltyPayload = enableUndonePenalty
+      ? {
+          enabled: true,
+          cutoffMode: undonePenaltyCutoffMode,
+          ...(undonePenaltyCutoffMode === 'deadline' && undonePenaltyCutoffAt
+            ? { cutoffAt: undonePenaltyCutoffAt }
+            : {}),
+          moneyDeltaType: 'absolute' as const,
+          value: Number(undonePenaltyValue || 0),
+        }
+      : undefined;
 
     const task: Task = {
       id,
@@ -441,6 +575,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       enabled: true,
       requirePin,
       ...(voiceAnnouncements !== undefined && { voiceAnnouncements }),
+      manualCompletionScore,
+      nonCompletable,
       stars: Number(starReward),
       money: Number(moneyReward),
       type: type as TaskType,
@@ -454,9 +590,42 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         ...(sanitizedLinkedTaskId && { linkedTaskId: sanitizedLinkedTaskId, linkedTaskOffset: linkedTaskOffset }),
       },
       assignment: assignmentPayload,
+      overduePolicy,
+      graceMinutes: overduePolicy === 'grace_then_open' ? Math.max(0, Number(graceMinutes || 0)) : undefined,
+      carryOverPolicy,
+      carryMaxDays: carryOverPolicy === 'carry_with_max_days' ? Math.max(1, Number(carryMaxDays || 1)) : undefined,
+      missConsequence: buildMissConsequencePayload(
+        missMoneyPenalty,
+        missStarPenalty,
+        missForfeitBaseReward,
+        customConsequenceLabel,
+      ),
+      moneyPolicy: moneyPolicyMode === 'simple'
+        ? {
+            mode: 'simple',
+            ...(undonePenaltyPayload ? { undonePenalty: undonePenaltyPayload } : {}),
+          }
+        : moneyPolicyMode === 'tiered'
+          ? {
+              mode: 'tiered',
+              tiers: [
+                { id: 'tier_0_15', fromMinutesLate: 0, toMinutesLate: 15, moneyDeltaType: 'absolute', value: Number(tier0to15 || 0) },
+                { id: 'tier_15_30', fromMinutesLate: 15, toMinutesLate: 30, moneyDeltaType: 'absolute', value: Number(tier15to30 || 0) },
+                { id: 'tier_30_plus', fromMinutesLate: 30, moneyDeltaType: 'absolute', value: Number(tier30plus || 0) },
+              ],
+              ...(undonePenaltyPayload ? { undonePenalty: undonePenaltyPayload } : {}),
+            }
+          : {
+              mode: 'continuous',
+              continuous: {
+                ratePerMinuteLate: Number(continuousRatePerMinute || 0),
+                minPayout: Number(continuousMinPayout || 0),
+              },
+              ...(undonePenaltyPayload ? { undonePenalty: undonePenaltyPayload } : {}),
+            },
       ...(schedulePayload ? { schedule: schedulePayload } : {}),
       // Add timed settings if isTimed is true (can be on recurring or oneoff)
-      ...(isTimed ? {
+      ...(!nonCompletable && isTimed ? {
         timed: {
           allowedSeconds: Math.round(allowedMinutes * 60),
           latePenaltyPercent: latePenaltyPercent / 100,
@@ -686,6 +855,23 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 <option value="oneoff">One-off</option>
               </select>
             </label>
+            <label htmlFor="task-non-completable">
+              Behavior:
+              <select
+                id="task-non-completable"
+                name="task-non-completable"
+                value={nonCompletable ? 'reminder' : 'completable'}
+                onChange={(e) => setNonCompletable(e.target.value === 'reminder')}
+              >
+                <option value="completable">Completable chore/task</option>
+                <option value="reminder">Reminder or note (non-completable)</option>
+              </select>
+            </label>
+            {nonCompletable && (
+              <p className="helper-text" style={{ marginTop: -4 }}>
+                Reminder tasks can repeat, rotate, and link rotations but children cannot complete them.
+              </p>
+            )}
             <label htmlFor="task-stars">
               Star Reward:
               <input 
@@ -694,7 +880,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 type="number" 
                 value={starReward} 
                 min={-10} 
-                onChange={e => setStarReward(Number(e.target.value))} 
+                onChange={e => setStarReward(Number(e.target.value))}
+                disabled={nonCompletable}
               />
             </label>
             <label htmlFor="task-money">
@@ -705,7 +892,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 type="number" 
                 value={moneyReward} 
                 step="0.01" 
-                onChange={e => setMoneyReward(Number(e.target.value))} 
+                onChange={e => setMoneyReward(Number(e.target.value))}
+                disabled={nonCompletable}
               />
             </label>
             <label htmlFor="task-require-pin">
@@ -1195,6 +1383,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
             )}
 
             {/* Timed task settings - can be enabled for both recurring and oneoff tasks */}
+            {!nonCompletable && (
             <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '12px', marginTop: '12px' }}>
               <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
                 ⏱️ Timer Settings
@@ -1249,6 +1438,233 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                 </>
               )}
             </fieldset>
+            )}
+
+            {!nonCompletable && (
+            <div style={{ marginTop: '12px' }}>
+              <button
+                type="button"
+                id="task-modal-advanced-policy-toggle"
+                className="btn btn-secondary"
+                aria-expanded={showAdvancedPolicy}
+                aria-controls="task-modal-advanced-policy-panel"
+                onClick={() => setShowAdvancedPolicy((v) => !v)}
+              >
+                {showAdvancedPolicy ? 'Hide advanced policy settings' : 'Show advanced policy settings'}
+              </button>
+              {!showAdvancedPolicy && (
+                <p className="helper-text" style={{ marginTop: '8px', marginBottom: 0 }}>
+                  Using default scheduling and rewards. Open the section above to customize overdue behavior, carry-over, missed consequences, and money rules.
+                </p>
+              )}
+              <div
+                id="task-modal-advanced-policy-panel"
+                hidden={!showAdvancedPolicy}
+                style={showAdvancedPolicy ? { marginTop: '12px' } : undefined}
+              >
+                <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '12px', marginTop: 0 }}>
+                  <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
+                    Overdue, Carry-over, and Consequences
+                  </legend>
+                  {initialTask?.consequenceRules && initialTask.consequenceRules.length > 0 && (
+                    <p className="helper-text" style={{ marginTop: 0 }}>
+                      Legacy/custom timed consequence rules are already active for this task. Some timing behavior may come from those rules.
+                    </p>
+                  )}
+                  <h4 style={{ margin: '8px 0 6px', fontSize: '0.95rem' }}>Who can complete after due time</h4>
+                  <label htmlFor="overdue-policy">
+                    Overdue Policy:
+                    <select id="overdue-policy" value={overduePolicy} onChange={(e) => setOverduePolicy(e.target.value as OverduePolicy)}>
+                      <option value="none">Only assigned child can complete on scheduled day</option>
+                      <option value="expire">Expire at due time</option>
+                      <option value="open_claim">Up for grabs after due time</option>
+                      <option value="grace_then_open">Grace period then up for grabs</option>
+                    </select>
+                  </label>
+                  {overduePolicy === 'grace_then_open' && (
+                    <label htmlFor="grace-minutes">
+                      Grace Minutes:
+                      <input id="grace-minutes" type="number" min={0} value={graceMinutes} onChange={(e) => setGraceMinutes(Number(e.target.value))} />
+                    </label>
+                  )}
+                  <p className="helper-text" style={{ marginTop: 6 }}>
+                    Preview: {overduePolicy === 'expire'
+                      ? 'Task expires at due time.'
+                      : overduePolicy === 'open_claim'
+                        ? 'Any child may claim it after due time.'
+                        : overduePolicy === 'grace_then_open'
+                          ? `Assigned child has ${Math.max(0, Number(graceMinutes || 0))} minute grace, then it becomes claimable.`
+                          : 'Assigned child can complete on schedule; no post-due claim behavior.'}
+                  </p>
+
+                  <h4 style={{ margin: '12px 0 6px', fontSize: '0.95rem' }}>If missed</h4>
+                  <label htmlFor="carry-policy">
+                    Carry-over:
+                    <select id="carry-policy" value={carryOverPolicy} onChange={(e) => setCarryOverPolicy(e.target.value as CarryOverPolicy)}>
+                      <option value="carry_none">Do not carry unfinished tasks</option>
+                      <option value="carry_until_complete">Carry until complete</option>
+                      <option value="carry_with_max_days">Carry with max days</option>
+                    </select>
+                  </label>
+                  {carryOverPolicy === 'carry_with_max_days' && (
+                    <label htmlFor="carry-max-days">
+                      Max Carry Days:
+                      <input id="carry-max-days" type="number" min={1} value={carryMaxDays} onChange={(e) => setCarryMaxDays(Number(e.target.value))} />
+                    </label>
+                  )}
+                  <fieldset style={{ border: 'none', padding: 0, margin: '12px 0 0' }}>
+                    <legend style={{ padding: 0, fontSize: '0.95rem', fontWeight: 600, color: '#4a5568', marginBottom: 8 }}>
+                      If the chore is missed (e.g. carry-over expires)
+                    </legend>
+                    <p className="helper-text" style={{ marginTop: 0 }}>
+                      You can combine options: subtract money and stars, forfeit the task payout, and add a note shown on the instance.
+                    </p>
+                    <label htmlFor="miss-money-penalty" style={{ display: 'block', marginTop: 10 }}>
+                      Subtract money ($)
+                      <input
+                        id="miss-money-penalty"
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        value={missMoneyPenalty}
+                        onChange={(e) => setMissMoneyPenalty(Number(e.target.value))}
+                      />
+                    </label>
+                    <label htmlFor="miss-star-penalty" style={{ display: 'block', marginTop: 10 }}>
+                      Subtract stars
+                      <input
+                        id="miss-star-penalty"
+                        type="number"
+                        step="1"
+                        min={0}
+                        value={missStarPenalty}
+                        onChange={(e) => setMissStarPenalty(Number(e.target.value))}
+                      />
+                    </label>
+                    <label htmlFor="miss-forfeit-base" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10 }}>
+                      <input
+                        id="miss-forfeit-base"
+                        type="checkbox"
+                        checked={missForfeitBaseReward}
+                        onChange={(e) => setMissForfeitBaseReward(e.target.checked)}
+                      />
+                      <span>Forfeit this task&apos;s base stars and money on a miss (no payout from the chore itself).</span>
+                    </label>
+                    <label htmlFor="custom-consequence" style={{ display: 'block', marginTop: 10 }}>
+                      Custom note (optional)
+                      <input
+                        id="custom-consequence"
+                        type="text"
+                        value={customConsequenceLabel}
+                        onChange={(e) => setCustomConsequenceLabel(e.target.value)}
+                        placeholder="e.g. donate a toy to the sibling bin"
+                      />
+                    </label>
+                  </fieldset>
+                  <p className="helper-text" style={{ marginTop: 6 }}>
+                    Preview: {carryOverPolicy === 'carry_none'
+                      ? 'If not done, it is treated as missed after the scheduled day.'
+                      : carryOverPolicy === 'carry_with_max_days'
+                        ? `Carries forward up to ${Math.max(1, Number(carryMaxDays || 1))} day(s) before becoming missed.`
+                        : 'Carries forward until completed.'}
+                    {(Number(missMoneyPenalty || 0) > 0 || Number(missStarPenalty || 0) > 0 || missForfeitBaseReward || customConsequenceLabel.trim())
+                      ? ` Miss result: ${missForfeitBaseReward ? 'no base payout' : 'base payout remains'}${Number(missStarPenalty || 0) > 0 ? `, -${Number(missStarPenalty || 0)} star(s)` : ''}${Number(missMoneyPenalty || 0) > 0 ? `, -$${Number(missMoneyPenalty || 0).toFixed(2)}` : ''}${customConsequenceLabel.trim() ? `, note: "${customConsequenceLabel.trim()}"` : ''}.`
+                      : ' No additional missed-task consequence configured.'}
+                  </p>
+
+                  <h4 style={{ margin: '12px 0 6px', fontSize: '0.95rem' }}>Completion review</h4>
+                  <label htmlFor="manual-completion-score" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '12px' }}>
+                    <input
+                      id="manual-completion-score"
+                      type="checkbox"
+                      checked={manualCompletionScore}
+                      onChange={(e) => setManualCompletionScore(e.target.checked)}
+                    />
+                    <span>
+                      Parent sets quality score (0–100%) when completing or approving timed runs. Rewards scale from the task’s base stars and money; you can change the score afterward with &quot;Adjust %&quot; on the task row.
+                    </span>
+                  </label>
+                </fieldset>
+
+                <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '12px', marginTop: '12px' }}>
+                  <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
+                    If completed late
+                  </legend>
+                  <label htmlFor="money-policy-mode">
+                    Money Policy Mode:
+                    <select id="money-policy-mode" value={moneyPolicyMode} onChange={(e) => setMoneyPolicyMode(e.target.value as MoneyPolicyMode)}>
+                      <option value="simple">Simple (base reward)</option>
+                      <option value="tiered">Tiered windows</option>
+                      <option value="continuous">Continuous decay ($/minute)</option>
+                    </select>
+                  </label>
+                  {moneyPolicyMode === 'tiered' && (
+                    <>
+                      <label htmlFor="tier-0-15">0-15 min late payout:
+                        <input id="tier-0-15" type="number" step="0.01" value={tier0to15} onChange={(e) => setTier0to15(Number(e.target.value))} />
+                      </label>
+                      <label htmlFor="tier-15-30">15-30 min late payout:
+                        <input id="tier-15-30" type="number" step="0.01" value={tier15to30} onChange={(e) => setTier15to30(Number(e.target.value))} />
+                      </label>
+                      <label htmlFor="tier-30-plus">&gt;30 min late payout:
+                        <input id="tier-30-plus" type="number" step="0.01" value={tier30plus} onChange={(e) => setTier30plus(Number(e.target.value))} />
+                      </label>
+                    </>
+                  )}
+                  {moneyPolicyMode === 'continuous' && (
+                    <>
+                      <label htmlFor="continuous-rate">Subtract $ per minute late:
+                        <input id="continuous-rate" type="number" step="0.01" min={0} value={continuousRatePerMinute} onChange={(e) => setContinuousRatePerMinute(Number(e.target.value))} />
+                      </label>
+                      <label htmlFor="continuous-min-payout">Minimum payout:
+                        <input id="continuous-min-payout" type="number" step="0.01" value={continuousMinPayout} onChange={(e) => setContinuousMinPayout(Number(e.target.value))} />
+                      </label>
+                    </>
+                  )}
+                  <label htmlFor="enable-undone-penalty" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10 }}>
+                    <input
+                      id="enable-undone-penalty"
+                      type="checkbox"
+                      checked={enableUndonePenalty}
+                      onChange={(e) => setEnableUndonePenalty(e.target.checked)}
+                    />
+                    <span>Apply an additional money penalty when a chore remains undone past a chosen trigger.</span>
+                  </label>
+                  {enableUndonePenalty && (
+                    <>
+                      <label htmlFor="undone-penalty-cutoff-mode">
+                        Undone penalty trigger:
+                        <select
+                          id="undone-penalty-cutoff-mode"
+                          value={undonePenaltyCutoffMode}
+                          onChange={(e) => setUndonePenaltyCutoffMode(e.target.value as 'next_due' | 'end_of_day' | 'deadline')}
+                        >
+                          <option value="next_due">After the next scheduled occurrence passes</option>
+                          <option value="end_of_day">End of the scheduled day</option>
+                          <option value="deadline">Specific deadline timestamp</option>
+                        </select>
+                      </label>
+                      {undonePenaltyCutoffMode === 'deadline' && (
+                        <label htmlFor="undone-penalty-cutoff-at">
+                          Deadline timestamp:
+                          <input
+                            id="undone-penalty-cutoff-at"
+                            type="datetime-local"
+                            value={undonePenaltyCutoffAt}
+                            onChange={(e) => setUndonePenaltyCutoffAt(e.target.value)}
+                          />
+                        </label>
+                      )}
+                      <label htmlFor="undone-penalty-value">
+                        Additional money penalty:
+                        <input id="undone-penalty-value" type="number" step="0.01" value={undonePenaltyValue} onChange={(e) => setUndonePenaltyValue(Number(e.target.value))} />
+                      </label>
+                    </>
+                  )}
+                </fieldset>
+              </div>
+            </div>
+            )}
           </form>
         </div>
         <div className="modal-footer">

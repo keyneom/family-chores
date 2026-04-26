@@ -6,9 +6,12 @@ import type { TimedCompletion } from "../types/task";
 import { useModalControl } from "./ModalControlContext";
 import { getTemplateForInstance, computeDueAt } from "../utils/taskInstanceGeneration";
 import {
+  canChildComplete,
+  getOverdueState,
   getTheoreticalAssignment,
   hasBlockingRealizedInstanceForTheoreticalProjection,
   isSimultaneousTask,
+  resolveCarryOverState,
   resolveUpcomingSlotForChild,
 } from "../utils/projectionUtils";
 import { getTodayString, getLocalDateString } from "../utils/dateUtils";
@@ -282,6 +285,9 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   const dbInstancesToday = (state.taskInstances || []).filter(
     inst => inst.childId === child.id && inst.date === today
   );
+  const dbCarryOverInstances = (state.taskInstances || []).filter(
+    inst => inst.childId === child.id && inst.date < today && !inst.completed
+  );
 
   // 2. Calculate Theoretical assignments for today
   // Filter out any that already have a Realized instance (completed or moved)
@@ -306,14 +312,20 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
           return;
         }
 
+        // Hide expired items in projection.
+        if (getOverdueState(task, today, new Date()) === 'expired') return;
+
         // Calculate projection
         // We pass ALL tasks because Linked Tasks need to look up their parents
         const assignments = getTheoreticalAssignment(task, today, state.tasks);
         
-        // Is this child assigned?
-        const myAssignment = assignments.find(a => a.childId === child.id);
-        
-        if (myAssignment) {
+        const overdueState = getOverdueState(task, today, new Date());
+        const claimableForAll = overdueState === 'claimable' && (task.overduePolicy === 'open_claim' || task.overduePolicy === 'grace_then_open');
+        const myAssignment = claimableForAll
+          ? { childId: child.id, rotationIndex: assignments.find(a => a.childId === child.id)?.rotationIndex ?? 0 }
+          : assignments.find(a => a.childId === child.id);
+
+        if (myAssignment && canChildComplete(task, child.id, assignments.map(a => a.childId), today, new Date())) {
             const dueAt = computeDueAt(task, today);
             const instance: TaskInstance = {
                 id: `projected_${task.id}_${child.id}_${today}`,
@@ -360,9 +372,14 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
   
   const realizedTasksToday = useMemo(() => {
       const results: TaskWithInstance[] = [];
-      dbInstancesToday.forEach((instance) => {
+      const mergedRealized = [...dbCarryOverInstances, ...dbInstancesToday];
+      mergedRealized.forEach((instance) => {
         const template = getTemplateForInstance(instance, state.tasks);
         if (!template) return; // Skip if template not found
+        if (instance.date < today) {
+          const carryState = resolveCarryOverState(template, instance, today);
+          if (carryState === 'expired_carry') return;
+        }
         
         // Build taskKey for backward compatibility with timers/completions
         const taskKey = buildTaskKey(instance.childId, instance.templateId, instance.date);
@@ -379,7 +396,7 @@ export default function ChildColumn({ child, onAddTask }: ChildColumnProps) {
         });
       });
       return results;
-  }, [dbInstancesToday, state.tasks, pendingCompletionByTaskKey]);
+  }, [dbInstancesToday, dbCarryOverInstances, state.tasks, pendingCompletionByTaskKey, today]);
 
   // Merge Realized + Projected
   // Realized takes precedence (already filtered out of projected if exists)

@@ -53,6 +53,57 @@ export function hasBlockingRealizedInstanceForTheoreticalProjection(
 }
 
 export type UpcomingProjectionResolution = 'show-realized' | 'skip-child' | 'project-theoretical';
+export type OverdueState = 'on_time' | 'grace' | 'claimable' | 'expired';
+export type CarryOverState = 'fresh' | 'carried' | 'expired_carry';
+
+function getDueAtForDate(task: Task, dateStr: string): Date | null {
+  if (task.schedule?.dueTime) {
+    const due = new Date(`${dateStr}T${task.schedule.dueTime}`);
+    return Number.isNaN(due.getTime()) ? null : due;
+  }
+  if (task.oneOff?.dueDate) {
+    const source = task.oneOff.dueDate.includes('T') ? task.oneOff.dueDate : `${task.oneOff.dueDate}T23:59`;
+    const due = new Date(source);
+    return Number.isNaN(due.getTime()) ? null : due;
+  }
+  return null;
+}
+
+export function getOverdueState(task: Task, dateStr: string, now = new Date()): OverdueState {
+  const dueAt = getDueAtForDate(task, dateStr);
+  if (!dueAt || task.overduePolicy === 'none' || !task.overduePolicy) return 'on_time';
+  if (now.getTime() <= dueAt.getTime()) return 'on_time';
+  if (task.overduePolicy === 'expire') return 'expired';
+  if (task.overduePolicy === 'open_claim') return 'claimable';
+  const graceMinutes = Math.max(0, task.graceMinutes || 0);
+  const graceEnds = dueAt.getTime() + graceMinutes * 60_000;
+  return now.getTime() <= graceEnds ? 'grace' : 'claimable';
+}
+
+export function canChildComplete(
+  task: Task,
+  childId: number,
+  assignedChildIds: number[],
+  dateStr: string,
+  now = new Date(),
+): boolean {
+  const overdue = getOverdueState(task, dateStr, now);
+  if (overdue === 'expired') return false;
+  if (overdue === 'claimable') return true;
+  return assignedChildIds.includes(childId);
+}
+
+export function resolveCarryOverState(task: Task, instance: TaskInstance, today: string): CarryOverState {
+  const policy = task.carryOverPolicy || 'carry_none';
+  if (instance.date >= today) return 'fresh';
+  if (policy === 'carry_none') return 'expired_carry';
+  if (policy === 'carry_with_max_days') {
+    const maxDays = Math.max(1, task.carryMaxDays || 1);
+    const daysBetween = getDaysSinceStart(instance.date, today);
+    return daysBetween > maxDays ? 'expired_carry' : 'carried';
+  }
+  return 'carried';
+}
 
 /**
  * For the upcoming-tasks list: decide if this child sees a realized row, nothing, or a projection.

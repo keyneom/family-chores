@@ -1176,6 +1176,22 @@ header h1 {
   transform: translateY(-1px);
 }
 
+.task-text-action-btn {
+  border: 1px solid rgba(64, 64, 64, 0.35);
+  background: #ffffff;
+  color: #3f3f46;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  padding: 4px 8px;
+  line-height: 1.1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.task-text-action-btn:hover {
+  background: #f4f4f5;
+}
+
 .payment-controls {
   margin-top: 15px;
   text-align: center;

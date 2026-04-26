@@ -16,6 +16,14 @@ import ActionLogEntry from "../types/actionLog";
 import { parseTaskKey } from "../utils/taskKey";
 import { deriveDueTimeFromCron } from "../utils/recurrenceBuilder";
 import { getLocalDateTimeString, parseLocalDate } from "../utils/dateUtils";
+import {
+  applyUndonePenaltyIfDue,
+  legacyTimedToConsequenceRules,
+  resolveMissConsequenceOutcome,
+  resolveTimedOutcome,
+} from "../utils/consequenceEngine";
+import { applyQualityMultiplier, clampQualityPercent } from "../utils/qualityScoreUtils";
+import { getOverdueState, resolveCarryOverState } from "../utils/projectionUtils";
 
 // Legacy shapes used when reading old saved state
 interface LegacyChore {
@@ -218,13 +226,19 @@ type ChoresAppAction =
   | { type: "REPLACE_TASK_INSTANCES"; payload: { taskId: string; startDate?: string; instances: TaskInstance[]; preserveCompleted?: boolean } }
   | { type: "UPDATE_TASK_INSTANCE"; payload: TaskInstance; actorHandle?: string | null }
   | { type: "DELETE_TASK_INSTANCE"; payload: string; actorHandle?: string | null } // instance id
-  | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number }; actorHandle?: string | null } // Legacy
-  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number }; actorHandle?: string | null }
+  | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number; qualityScorePercent?: number }; actorHandle?: string | null } // Legacy
+  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number; qualityScorePercent?: number }; actorHandle?: string | null }
+  | { type: "RESET_TASK_PROGRESS"; payload: { taskKey: string; childId: number; instanceId?: string }; actorHandle?: string | null }
+  | { type: "ADJUST_INSTANCE_COMPLETION_QUALITY"; payload: { instanceId: string; childId: number; qualityScorePercent: number }; actorHandle?: string | null }
+  | { type: "MARK_TASK_UNFINISHED"; payload: { instanceId: string; childId: number; starDelta?: number; moneyDelta?: number }; actorHandle?: string | null }
+  | { type: "WAIVE_TASK_INSTANCE"; payload: { instanceId: string; reason?: string }; actorHandle?: string | null }
+  | { type: "APPLY_UNDONE_PENALTY"; payload: { nowIso?: string }; actorHandle?: string | null }
+  | { type: "APPLY_MISSED_CONSEQUENCES"; payload: { nowIso?: string }; actorHandle?: string | null }
   | { type: "PAY_CHILD"; payload: number }
   | { type: "START_TIMER"; payload: { timer: Timer } }
   | { type: "STOP_TIMER"; payload: { timerId: string; stoppedAt: string } }
   | { type: "ADD_PENDING_TIMED_COMPLETION"; payload: { completion: TimedCompletion } }
-  | { type: "APPROVE_TIMED_COMPLETION"; payload: { completionId: string; approve: boolean; applyMoney?: boolean; actorHandle?: string | null } }
+  | { type: "APPROVE_TIMED_COMPLETION"; payload: { completionId: string; approve: boolean; applyMoney?: boolean; qualityScorePercent?: number; actorHandle?: string | null } }
   | { type: "UPDATE_PARENT_SETTINGS"; payload: Partial<ParentSettings>; actorHandle?: string | null }
   | { type: "RESET_ALL_DATA" }
   | { type: "SET_STATE"; payload: ChoresAppState };
@@ -501,6 +515,7 @@ function normalizeTaskPayload(task: Task): Task {
     assignment,
     rotation,
     schedule,
+    consequenceRules: legacyTimedToConsequenceRules(task),
     ...(oneOff ? { oneOff } : {}),
   };
 }
@@ -543,7 +558,9 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         children: state.children.map(child => child.id === action.payload.id ? { ...child, ...action.payload } : child),
         actionLog: [ ...(state.actionLog || []), makeLogEntry('UPDATE_CHILD', { child: action.payload }, action.actorHandle ?? null) ],
       };
-    case "COMPLETE_TASK":
+    case "COMPLETE_TASK": {
+      const pct = clampQualityPercent(action.payload.qualityScorePercent ?? 100);
+      const applied = applyQualityMultiplier(action.payload.starReward, action.payload.moneyReward, pct);
       return {
         ...state,
         completedTasks: {
@@ -554,13 +571,14 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
           child.id === action.payload.childId
             ? {
                 ...child,
-                stars: child.stars + action.payload.starReward,
-                money: child.money + action.payload.moneyReward,
+                stars: child.stars + applied.stars,
+                money: child.money + applied.money,
               }
             : child
         ),
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK', action.payload, action.actorHandle ?? null) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK', { ...action.payload, ...applied, qualityScorePercent: pct }, action.actorHandle ?? null) ],
       };
+    }
     case "START_TIMER": {
       const existingTimers = { ...(state.timers || {}) };
       // Remove any existing timers with the same taskKey and childId to prevent duplicates
@@ -672,20 +690,35 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         colorOverride: instance.colorOverride ?? template?.color,
         dueAtOverride: instance.dueAtOverride ?? instance.dueAt,
       };
-      
+      const pct = clampQualityPercent(action.payload.qualityScorePercent ?? 100);
+      const baseStars = Number(action.payload.starReward);
+      const baseMoney = Number(action.payload.moneyReward);
+      const applied = applyQualityMultiplier(baseStars, baseMoney, pct);
+
       return {
         ...state,
         taskInstances: state.taskInstances.map(inst =>
           inst.id === action.payload.instanceId
-            ? { ...inst, completed: true, completedAt: new Date().toISOString(), ...snapshotOverrides }
+            ? {
+                ...inst,
+                completed: true,
+                completedAt: new Date().toISOString(),
+                ...snapshotOverrides,
+                completionQualityPercent: pct,
+                scoreRewardBaseStars: baseStars,
+                scoreRewardBaseMoney: baseMoney,
+                rewardStarsApplied: applied.stars,
+                rewardMoneyApplied: applied.money,
+                rewardMoneySuppressed: false,
+              }
             : inst
         ),
         children: state.children.map(child =>
           child.id === action.payload.childId
             ? {
                 ...child,
-                stars: child.stars + action.payload.starReward,
-                money: child.money + action.payload.moneyReward,
+                stars: child.stars + applied.stars,
+                money: child.money + applied.money,
               }
             : child
         ),
@@ -694,7 +727,327 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
           ...state.completedTasks,
           [`${instance.childId}-${instance.templateId}-${instance.date}`]: true,
         },
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK_INSTANCE', action.payload, action.actorHandle ?? null) ],
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('COMPLETE_TASK_INSTANCE', { ...action.payload, ...applied, qualityScorePercent: pct }, action.actorHandle ?? null) ],
+      };
+    }
+    case "RESET_TASK_PROGRESS": {
+      const parsed = parseTaskKey(action.payload.taskKey);
+      const instance =
+        (action.payload.instanceId
+          ? state.taskInstances.find((inst) => inst.id === action.payload.instanceId)
+          : undefined) ||
+        state.taskInstances.find(
+          (inst) =>
+            parsed.taskId &&
+            parsed.date &&
+            inst.childId === action.payload.childId &&
+            inst.templateId === parsed.taskId &&
+            inst.date === parsed.date,
+        );
+      const task = instance ? state.tasks.find((t) => t.id === instance.templateId) : undefined;
+
+      const rollbackStars = instance?.completed
+        ? -Number(instance.rewardStarsApplied ?? instance.stars ?? task?.stars ?? 0)
+        : 0;
+      const rollbackMoney = instance?.completed
+        ? -Number(instance.rewardMoneyApplied ?? instance.money ?? task?.money ?? 0)
+        : 0;
+
+      const resetTimedCompletionIds = new Set<string>();
+      if (instance?.timedCompletionId) resetTimedCompletionIds.add(instance.timedCompletionId);
+      (state.timedCompletions || []).forEach((c) => {
+        if (c.taskKey === action.payload.taskKey && c.childId === action.payload.childId) {
+          resetTimedCompletionIds.add(c.id);
+        }
+      });
+
+      const timers = { ...(state.timers || {}) };
+      Object.values(timers).forEach((timer) => {
+        if (timer.taskKey === action.payload.taskKey && timer.childId === action.payload.childId) {
+          delete timers[timer.id];
+        }
+      });
+
+      const updatedInstances = state.taskInstances.map((inst) => {
+        if (instance && inst.id === instance.id) {
+          return {
+            ...inst,
+            completed: false,
+            completedAt: undefined,
+            timedCompletionId: undefined,
+            consequenceApplied: false,
+            undonePenaltyAppliedAt: undefined,
+            missConsequenceAppliedAt: undefined,
+            missConsequenceStarDelta: undefined,
+            missConsequenceMoneyDelta: undefined,
+            completionQualityPercent: undefined,
+            scoreRewardBaseStars: undefined,
+            scoreRewardBaseMoney: undefined,
+            rewardStarsApplied: undefined,
+            rewardMoneyApplied: undefined,
+            rewardMoneySuppressed: undefined,
+            customConsequenceLabel: undefined,
+          };
+        }
+        return inst;
+      });
+
+      const timedCompletions = (state.timedCompletions || []).filter(
+        (c) => !resetTimedCompletionIds.has(c.id),
+      );
+
+      const completedTasks = { ...state.completedTasks };
+      delete completedTasks[action.payload.taskKey];
+      if (instance) {
+        delete completedTasks[`${instance.childId}-${instance.templateId}-${instance.date}`];
+      }
+
+      return {
+        ...state,
+        timers,
+        timedCompletions,
+        taskInstances: updatedInstances,
+        completedTasks,
+        children: state.children.map((child) =>
+          child.id === action.payload.childId
+            ? {
+                ...child,
+                stars: child.stars + rollbackStars,
+                money: child.money + rollbackMoney,
+              }
+            : child,
+        ),
+        actionLog: [
+          ...(state.actionLog || []),
+          makeLogEntry(
+            "RESET_TASK_PROGRESS",
+            {
+              ...action.payload,
+              rollbackStars,
+              rollbackMoney,
+              clearedTimedCompletions: Array.from(resetTimedCompletionIds),
+            },
+            action.actorHandle ?? null,
+          ),
+        ],
+      };
+    }
+    case "ADJUST_INSTANCE_COMPLETION_QUALITY": {
+      const instance = state.taskInstances.find((inst) => inst.id === action.payload.instanceId);
+      if (!instance || !instance.completed) return state;
+      const template = state.tasks.find((t) => t.id === instance.templateId);
+      const baseStars = Number(
+        instance.scoreRewardBaseStars ?? instance.stars ?? template?.stars ?? 0,
+      );
+      const baseMoney = Number(
+        instance.rewardMoneySuppressed
+          ? 0
+          : (instance.scoreRewardBaseMoney ?? instance.money ?? template?.money ?? 0),
+      );
+      const oldStars = Number(
+        instance.rewardStarsApplied ??
+          Math.round((baseStars * (instance.completionQualityPercent ?? 100)) / 100),
+      );
+      const oldMoney = Number(
+        instance.rewardMoneyApplied ??
+          Math.round(((baseMoney * (instance.completionQualityPercent ?? 100)) / 100) * 100) / 100,
+      );
+      const pct = clampQualityPercent(action.payload.qualityScorePercent);
+      const next = applyQualityMultiplier(baseStars, baseMoney, pct);
+      const starDelta = next.stars - oldStars;
+      const moneyDelta = next.money - oldMoney;
+
+      return {
+        ...state,
+        taskInstances: state.taskInstances.map((inst) =>
+          inst.id === action.payload.instanceId
+            ? {
+                ...inst,
+                completionQualityPercent: pct,
+                scoreRewardBaseStars: baseStars,
+                scoreRewardBaseMoney: baseMoney,
+                rewardStarsApplied: next.stars,
+                rewardMoneyApplied: next.money,
+                rewardMoneySuppressed: Boolean(instance.rewardMoneySuppressed),
+              }
+            : inst,
+        ),
+        children: state.children.map((child) =>
+          child.id === action.payload.childId
+            ? {
+                ...child,
+                stars: child.stars + starDelta,
+                money: child.money + moneyDelta,
+              }
+            : child,
+        ),
+        actionLog: [
+          ...(state.actionLog || []),
+          makeLogEntry(
+            'ADJUST_INSTANCE_COMPLETION_QUALITY',
+            { ...action.payload, starDelta, moneyDelta, next },
+            action.actorHandle ?? null,
+          ),
+        ],
+      };
+    }
+    case "MARK_TASK_UNFINISHED": {
+      const instance = state.taskInstances.find(inst => inst.id === action.payload.instanceId);
+      if (!instance || !instance.completed) return state;
+      return {
+        ...state,
+        taskInstances: state.taskInstances.map(inst =>
+          inst.id === action.payload.instanceId
+            ? {
+                ...inst,
+                completed: false,
+                completedAt: undefined,
+                consequenceApplied: false,
+                timedCompletionId: undefined,
+              }
+            : inst
+        ),
+        children: state.children.map(child =>
+          child.id === action.payload.childId
+            ? {
+                ...child,
+                stars: child.stars + Number(action.payload.starDelta || 0),
+                money: child.money + Number(action.payload.moneyDelta || 0),
+              }
+            : child
+        ),
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('MARK_TASK_UNFINISHED', action.payload, action.actorHandle ?? null) ],
+      };
+    }
+    case "WAIVE_TASK_INSTANCE": {
+      return {
+        ...state,
+        taskInstances: state.taskInstances.map(inst =>
+          inst.id === action.payload.instanceId
+            ? {
+                ...inst,
+                completed: true,
+                completedAt: inst.completedAt || new Date().toISOString(),
+                customConsequenceLabel: action.payload.reason || "Waived by parent",
+              }
+            : inst
+        ),
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('WAIVE_TASK_INSTANCE', action.payload, action.actorHandle ?? null) ],
+      };
+    }
+    case "APPLY_UNDONE_PENALTY": {
+      const nowIso = action.payload.nowIso || new Date().toISOString();
+      const today = nowIso.split("T")[0];
+      const moneyByChild = new Map<number, number>();
+      const updatedInstances = state.taskInstances.map((inst) => {
+        if (inst.completed) return inst;
+        const task = state.tasks.find(t => t.id === inst.templateId);
+        if (!task) return inst;
+        const rule = task.moneyPolicy?.undonePenalty;
+        let penalty = applyUndonePenaltyIfDue(task, inst, nowIso);
+        if (
+          !penalty &&
+          !inst.undonePenaltyAppliedAt &&
+          rule?.enabled &&
+          rule.moneyDeltaType === "absolute" &&
+          typeof rule.value === "number" &&
+          rule.cutoffMode === "next_due" &&
+          inst.date < today
+        ) {
+          penalty = { starReward: 0, moneyReward: Number(rule.value) };
+        }
+        if (!penalty) return inst;
+        moneyByChild.set(inst.childId, (moneyByChild.get(inst.childId) || 0) + penalty.moneyReward);
+        return { ...inst, consequenceApplied: true, undonePenaltyAppliedAt: nowIso };
+      });
+      if (moneyByChild.size === 0) return state;
+      return {
+        ...state,
+        taskInstances: updatedInstances,
+        children: state.children.map((child) => {
+          const delta = moneyByChild.get(child.id);
+          if (!delta) return child;
+          return { ...child, money: child.money + delta };
+        }),
+        actionLog: [ ...(state.actionLog || []), makeLogEntry('APPLY_UNDONE_PENALTY', { nowIso, children: Object.fromEntries(moneyByChild) }, action.actorHandle ?? null) ],
+      };
+    }
+    case "APPLY_MISSED_CONSEQUENCES": {
+      const nowIso = action.payload.nowIso || new Date().toISOString();
+      const now = new Date(nowIso);
+      const today = nowIso.split("T")[0];
+      const starsByChild = new Map<number, number>();
+      const moneyByChild = new Map<number, number>();
+      const updates: Array<{
+        instanceId: string;
+        childId: number;
+        starDelta: number;
+        moneyDelta: number;
+        customConsequenceLabel?: string;
+      }> = [];
+
+      const updatedInstances = state.taskInstances.map((inst) => {
+        if (inst.completed || inst.missConsequenceAppliedAt) return inst;
+        const task = state.tasks.find((t) => t.id === inst.templateId);
+        if (!task || !task.missConsequence) return inst;
+
+        const isCarryExpired =
+          inst.date < today && resolveCarryOverState(task, inst, today) === "expired_carry";
+        const isOverdueExpired = getOverdueState(task, inst.date, now) === "expired";
+        if (!isCarryExpired && !isOverdueExpired) return inst;
+
+        const baseStars = Number(inst.stars ?? task.stars ?? 0);
+        const baseMoney = Number(inst.money ?? task.money ?? 0);
+        const out = resolveMissConsequenceOutcome(task, baseStars, baseMoney);
+        if (
+          Number(out.starReward || 0) === 0 &&
+          Number(out.moneyReward || 0) === 0 &&
+          !out.customConsequenceLabel
+        ) {
+          return inst;
+        }
+
+        const starDelta = Number(out.starReward || 0);
+        const moneyDelta = Number(out.moneyReward || 0);
+        starsByChild.set(inst.childId, (starsByChild.get(inst.childId) || 0) + starDelta);
+        moneyByChild.set(inst.childId, (moneyByChild.get(inst.childId) || 0) + moneyDelta);
+        updates.push({
+          instanceId: inst.id,
+          childId: inst.childId,
+          starDelta,
+          moneyDelta,
+          customConsequenceLabel: out.customConsequenceLabel,
+        });
+        return {
+          ...inst,
+          missConsequenceAppliedAt: nowIso,
+          missConsequenceStarDelta: starDelta,
+          missConsequenceMoneyDelta: moneyDelta,
+          ...(out.customConsequenceLabel
+            ? { customConsequenceLabel: out.customConsequenceLabel }
+            : {}),
+        };
+      });
+
+      if (updates.length === 0) return state;
+
+      return {
+        ...state,
+        taskInstances: updatedInstances,
+        children: state.children.map((child) => {
+          const starDelta = starsByChild.get(child.id) || 0;
+          const moneyDelta = moneyByChild.get(child.id) || 0;
+          if (starDelta === 0 && moneyDelta === 0) return child;
+          return {
+            ...child,
+            stars: child.stars + starDelta,
+            money: child.money + moneyDelta,
+          };
+        }),
+        actionLog: [
+          ...(state.actionLog || []),
+          makeLogEntry("APPLY_MISSED_CONSEQUENCES", { nowIso, updates }, action.actorHandle ?? null),
+        ],
       };
     }
     case "STOP_TIMER": {
@@ -711,9 +1064,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
       // Find task to get reward values (taskKey format: childId-taskId-date or legacy childId:choreId)
       let baseStarReward = 0;
       let baseMoneyReward = 0;
-      let latePenalty = 0.5;
       let autoApprove = !!state.parentSettings.timedAutoApproveDefault;
-      let allowNegative = false;
       const parsedKey = parseTaskKey(timer.taskKey);
       const parsedTaskId = parsedKey.taskId;
       const parsedDate = parsedKey.date;
@@ -731,17 +1082,20 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         baseStarReward = matchedTask.stars || 0;
         baseMoneyReward = matchedTask.money || 0;
         if (matchedTask.timed) {
-          latePenalty = matchedTask.timed.latePenaltyPercent ?? 0.5;
           autoApprove = matchedTask.timed.autoApproveOnStop ?? autoApprove;
-          allowNegative = matchedTask.timed.allowNegative ?? false;
         }
       }
-      
-      const rewardPercentage = elapsedSeconds <= allowed ? 1 : 1 - latePenalty;
-      // Stars shouldn't scale; if completed on time give full stars, otherwise no stars for late completion
-      const adjustedStars = elapsedSeconds <= allowed ? baseStarReward : 0;
-      const adjustedMoneyRaw = baseMoneyReward * rewardPercentage;
-      const adjustedMoney = !allowNegative && adjustedMoneyRaw < 0 ? 0 : +(adjustedMoneyRaw);
+
+      const timedOutcome = matchedTask
+        ? resolveTimedOutcome(matchedTask, elapsedSeconds, allowed)
+        : {
+            starReward: elapsedSeconds <= allowed ? baseStarReward : 0,
+            moneyReward: elapsedSeconds <= allowed ? baseMoneyReward : 0,
+          };
+      const rewardPercentage =
+        baseMoneyReward === 0 ? 1 : Number((timedOutcome.moneyReward || 0) / baseMoneyReward);
+      const adjustedStars = Number(timedOutcome.starReward || 0);
+      const adjustedMoney = Number(timedOutcome.moneyReward || 0);
 
       // remove timer
       delete timers[action.payload.timerId];
@@ -818,13 +1172,38 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
 
       // If auto-approved, immediately apply rewards (money can be negative). Otherwise parent must approve.
       if (completion.approved) {
+        const timedApplied = applyQualityMultiplier(completion.starReward, completion.moneyReward, 100);
         newState = {
           ...newState,
           children: newState.children.map(child =>
             child.id === completion.childId
-              ? { ...child, stars: child.stars + completion.starReward, money: +(child.money + completion.moneyReward) }
+              ? {
+                  ...child,
+                  stars: child.stars + timedApplied.stars,
+                  money: +(child.money + timedApplied.money),
+                }
               : child
           ),
+          taskInstances: newState.taskInstances.map((inst) => {
+            if (
+              parsedTaskId &&
+              parsedDate &&
+              inst.childId === timer.childId &&
+              inst.templateId === parsedTaskId &&
+              inst.date === parsedDate
+            ) {
+              return {
+                ...inst,
+                completionQualityPercent: 100,
+                scoreRewardBaseStars: completion.starReward,
+                scoreRewardBaseMoney: completion.moneyReward,
+                rewardStarsApplied: timedApplied.stars,
+                rewardMoneyApplied: timedApplied.money,
+                rewardMoneySuppressed: false,
+              };
+            }
+            return inst;
+          }),
         } as ChoresAppState;
         // Log that auto-approval applied rewards
         newState.actionLog = [ ...(newState.actionLog || []), makeLogEntry('AUTO_APPROVE_TIMED_COMPLETION', { completionId: completion.id, childId: completion.childId }) ];
@@ -839,25 +1218,59 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
         actionLog: [ ...(state.actionLog || []), makeLogEntry('ADD_PENDING_TIMED_COMPLETION', { completion: action.payload.completion }) ],
       };
     case "APPROVE_TIMED_COMPLETION": {
-      const completions = (state.timedCompletions || []).map(c =>
-        c.id === action.payload.completionId ? { ...c, approved: action.payload.approve } : c
+      const completions = (state.timedCompletions || []).map((c) =>
+        c.id === action.payload.completionId ? { ...c, approved: action.payload.approve } : c,
       );
-      // find the completion from existing state
-      const comp = (state.timedCompletions || []).find(c => c.id === action.payload.completionId);
+      const comp = (state.timedCompletions || []).find((c) => c.id === action.payload.completionId);
+      const pct = clampQualityPercent(action.payload.qualityScorePercent ?? 100);
+      const applied = comp
+        ? applyQualityMultiplier(comp.starReward, comp.moneyReward, pct)
+        : { stars: 0, money: 0 };
+      const parsedKey = comp ? parseTaskKey(comp.taskKey) : { taskId: undefined as string | undefined, date: undefined as string | undefined };
       let children = state.children;
+      let taskInstances = state.taskInstances;
       if (comp && action.payload.approve) {
-        // apply stars always when approved
-        children = state.children.map(child =>
+        const moneySuppressed = action.payload.applyMoney === false;
+        const moneyAdd = moneySuppressed ? 0 : applied.money;
+        children = state.children.map((child) =>
           child.id === comp.childId
-            ? { ...child, stars: child.stars + comp.starReward, money: +(child.money + (action.payload.applyMoney === false ? 0 : comp.moneyReward)) }
-            : child
+            ? { ...child, stars: child.stars + applied.stars, money: +(child.money + moneyAdd) }
+            : child,
         );
+        if (parsedKey.taskId && parsedKey.date) {
+          taskInstances = state.taskInstances.map((inst) => {
+            if (
+              inst.childId === comp.childId &&
+              inst.templateId === parsedKey.taskId &&
+              inst.date === parsedKey.date
+            ) {
+              return {
+                ...inst,
+                completionQualityPercent: pct,
+                scoreRewardBaseStars: comp.starReward,
+                scoreRewardBaseMoney: moneySuppressed ? 0 : comp.moneyReward,
+                rewardStarsApplied: applied.stars,
+                rewardMoneyApplied: moneyAdd,
+                rewardMoneySuppressed: moneySuppressed,
+              };
+            }
+            return inst;
+          });
+        }
       }
       return {
         ...state,
         timedCompletions: completions,
         children,
-        actionLog: [ ...(state.actionLog || []), makeLogEntry('APPROVE_TIMED_COMPLETION', { completionId: action.payload.completionId, approve: action.payload.approve }, action.payload.actorHandle ?? null) ],
+        taskInstances,
+        actionLog: [
+          ...(state.actionLog || []),
+          makeLogEntry(
+            'APPROVE_TIMED_COMPLETION',
+            { completionId: action.payload.completionId, approve: action.payload.approve, qualityScorePercent: pct },
+            action.payload.actorHandle ?? null,
+          ),
+        ],
       };
     }
     // ADD_ONE_OFF_TASK removed - OneOffTaskModal now uses ADD_TASK + ADD_TASK_INSTANCE directly
@@ -1028,6 +1441,16 @@ export function ChoresAppProvider({ children }: { children: ReactNode }) {
     const pruned = pruneState(state);
     localStorage.setItem("choresAppState", JSON.stringify(pruned));
   }, [state]);
+
+  useEffect(() => {
+    const run = () => {
+      dispatch({ type: "APPLY_MISSED_CONSEQUENCES", payload: { nowIso: new Date().toISOString() } });
+      dispatch({ type: "APPLY_UNDONE_PENALTY", payload: { nowIso: new Date().toISOString() } });
+    };
+    run();
+    const id = window.setInterval(run, 60_000);
+    return () => window.clearInterval(id);
+  }, [dispatch]);
 
   return (
     <ChoresAppContext.Provider value={{ state, dispatch }}>

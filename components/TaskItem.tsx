@@ -4,6 +4,7 @@ import { useChoresApp } from "./ChoresAppContext";
 import { useModalControl } from "./ModalControlContext";
 import PinModal from "./modals/PinModal";
 import AlertModal from "./modals/AlertModal";
+import CompletionScoreModal from "./modals/CompletionScoreModal";
 import DeleteTaskModal, { DeleteOption } from "./modals/DeleteTaskModal";
 import EditTaskConfirmModal, { EditOption } from "./modals/EditTaskConfirmModal";
 import TimedCountdown from "./TimedCountdown";
@@ -15,6 +16,7 @@ import { formatDateTimeCompact } from "../utils/dateUtils";
 import { buildTaskKey, parseTaskKey } from "../utils/taskKey";
 import { requiresPin, hasApprovers } from "../utils/approvalUtils";
 import { addExcludeDateToTask } from "../utils/scheduleUtils";
+import { getOverdueState, resolveCarryOverState } from "../utils/projectionUtils";
 
 // Renderable shape used by the UI (Task with metadata added by ChildColumn)
 interface RenderableTask extends Task {
@@ -62,6 +64,11 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const [editConfirmOpen, setEditConfirmOpen] = React.useState(false);
   const [alertOpen, setAlertOpen] = React.useState(false);
   const [alertMessage, setAlertMessage] = React.useState<string | null>(null);
+  const [scoreModalOpen, setScoreModalOpen] = React.useState(false);
+  const [scoreModalMode, setScoreModalMode] = React.useState<'complete' | 'approve-timed' | 'adjust' | null>(null);
+  const [scoreActorHandle, setScoreActorHandle] = React.useState<string | undefined>(undefined);
+  const [pendingQualityAdjust, setPendingQualityAdjust] = React.useState(false);
+  const [pendingResetProgress, setPendingResetProgress] = React.useState(false);
   const [pendingDeleteAction, setPendingDeleteAction] = React.useState<{
     option: DeleteOption;
     taskId: string;
@@ -161,6 +168,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   };
 
   const handleComplete = () => {
+    if (normalized.nonCompletable) return;
     // For timed tasks, use Start/Stop flow. For non-timed, complete immediately.
     const isTimed = !!normalized.timed || typeof normalized.timedAllowedSeconds === 'number';
     if (isTimed) return;
@@ -192,13 +200,20 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
       setPinOpen(true);
       return;
     }
-    
-    // No approval required, complete immediately
+
+    if (normalized.manualCompletionScore) {
+      setScoreModalMode('complete');
+      setScoreActorHandle(undefined);
+      setScoreModalOpen(true);
+      return;
+    }
+
     performCompletion();
   };
 
-  const performCompletion = (actorHandle?: string) => {
+  const performCompletion = (actorHandle?: string, qualityScorePercent?: number) => {
     if (actualInstance) {
+      if (normalized.nonCompletable) return;
       // Check if this is a projected instance (not yet in DB)
       const isProjected = actualInstance.id.startsWith('projected_') || actualInstance.id.startsWith('scheduled_');
       
@@ -221,6 +236,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             childId,
             starReward: Number((realizedInstance.stars ?? normalized.stars) || 0),
             moneyReward: Number((realizedInstance.money ?? normalized.money) || 0),
+            ...(typeof qualityScorePercent === 'number' ? { qualityScorePercent } : {}),
           },
           actorHandle,
         });
@@ -233,6 +249,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             childId,
             starReward: Number((actualInstance.stars ?? normalized.stars) || 0),
             moneyReward: Number((actualInstance.money ?? normalized.money) || 0),
+            ...(typeof qualityScorePercent === 'number' ? { qualityScorePercent } : {}),
           },
           actorHandle,
         });
@@ -246,6 +263,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           childId,
           starReward: Number(normalized.stars || 0),
           moneyReward: Number(normalized.money || 0),
+          ...(typeof qualityScorePercent === 'number' ? { qualityScorePercent } : {}),
         },
         actorHandle,
       });
@@ -267,6 +285,62 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
 
   const handleDelete = () => {
     setDeleteConfirmOpen(true);
+  };
+
+  const handleMarkUnfinished = () => {
+    if (!actualInstance?.id) return;
+    dispatch({
+      type: 'MARK_TASK_UNFINISHED',
+      payload: {
+        instanceId: actualInstance.id,
+        childId,
+        starDelta: -Number(
+          actualInstance.rewardStarsApplied ?? actualInstance.stars ?? normalized.stars ?? 0,
+        ),
+        moneyDelta: -Number(
+          actualInstance.rewardMoneyApplied ?? actualInstance.money ?? normalized.money ?? 0,
+        ),
+      },
+    });
+  };
+
+  const handleWaive = () => {
+    if (!actualInstance?.id) return;
+    dispatch({
+      type: 'WAIVE_TASK_INSTANCE',
+      payload: {
+        instanceId: actualInstance.id,
+        reason: 'Waived by parent',
+      },
+    });
+  };
+
+  const performResetProgress = (actorHandle?: string) => {
+    if (!taskKey) return;
+    dispatch({
+      type: 'RESET_TASK_PROGRESS',
+      payload: { taskKey, childId, instanceId: actualInstance?.id },
+      actorHandle,
+    });
+  };
+
+  const handleResetProgress = () => {
+    const approvalRequired = requiresPin({
+      action: 'complete',
+      parentSettings: state.parentSettings,
+      task: normalized,
+    });
+    if (approvalRequired) {
+      if (!hasApprovers(state.parentSettings)) {
+        setAlertMessage("Resetting task progress requires parent approval, but no approvers are defined. Please add an approver in Settings first.");
+        setAlertOpen(true);
+        return;
+      }
+      setPendingResetProgress(true);
+      setPinOpen(true);
+      return;
+    }
+    performResetProgress();
   };
 
   const performDelete = (option: DeleteOption, actorHandle?: string) => {
@@ -372,22 +446,121 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
       return;
     }
 
-    // Check if this is for a timed completion approval
-    if (pendingCompletionActionId && pendingCompletionId) {
-      dispatch({ type: 'APPROVE_TIMED_COMPLETION', payload: { completionId: pendingCompletionActionId, approve: true, applyMoney: applyMoneyOnApprove, actorHandle } });
-      setPendingCompletionActionId(null);
-    } else {
-      // Regular task completion
-      performCompletion(actorHandle);
+    if (pendingResetProgress) {
+      setPendingResetProgress(false);
+      performResetProgress(actorHandle);
+      return;
     }
+
+    if (pendingQualityAdjust) {
+      setPendingQualityAdjust(false);
+      setScoreModalMode('adjust');
+      setScoreActorHandle(actorHandle);
+      setScoreModalOpen(true);
+      return;
+    }
+
+    if (pendingCompletionActionId && pendingCompletionId) {
+      if (normalized.manualCompletionScore) {
+        setScoreModalMode('approve-timed');
+        setScoreActorHandle(actorHandle);
+        setScoreModalOpen(true);
+      } else {
+        dispatch({
+          type: 'APPROVE_TIMED_COMPLETION',
+          payload: {
+            completionId: pendingCompletionActionId,
+            approve: true,
+            applyMoney: applyMoneyOnApprove,
+            actorHandle,
+          },
+        });
+        setPendingCompletionActionId(null);
+      }
+      return;
+    }
+
+    if (pendingCompletionActionId && normalized.manualCompletionScore) {
+      setScoreModalMode('complete');
+      setScoreActorHandle(actorHandle);
+      setScoreModalOpen(true);
+      return;
+    }
+
+    performCompletion(actorHandle);
+    setPendingCompletionActionId(null);
+  };
+
+  const handleScoreModalConfirm = (percent: number) => {
+    if (scoreModalMode === 'complete') {
+      performCompletion(scoreActorHandle, percent);
+    } else if (scoreModalMode === 'approve-timed' && pendingCompletionActionId) {
+      dispatch({
+        type: 'APPROVE_TIMED_COMPLETION',
+        payload: {
+          completionId: pendingCompletionActionId,
+          approve: true,
+          applyMoney: applyMoneyOnApprove,
+          qualityScorePercent: percent,
+          actorHandle: scoreActorHandle,
+        },
+      });
+    } else if (scoreModalMode === 'adjust' && actualInstance?.id) {
+      dispatch({
+        type: 'ADJUST_INSTANCE_COMPLETION_QUALITY',
+        payload: { instanceId: actualInstance.id, childId, qualityScorePercent: percent },
+        actorHandle: scoreActorHandle,
+      });
+    }
+    setScoreModalOpen(false);
+    setScoreModalMode(null);
+    setPendingCompletionActionId(null);
+    setScoreActorHandle(undefined);
+  };
+
+  const handleScoreModalCancel = () => {
+    setScoreModalOpen(false);
+    setScoreModalMode(null);
+    setPendingCompletionActionId(null);
+    setScoreActorHandle(undefined);
+    setPendingQualityAdjust(false);
+  };
+
+  const handleAdjustScore = () => {
+    const approvalRequired = requiresPin({
+      action: 'complete',
+      parentSettings: state.parentSettings,
+      task: normalized,
+    });
+    if (approvalRequired) {
+      if (!hasApprovers(state.parentSettings)) {
+        setAlertMessage("Adjusting completion score requires parent approval, but no approvers are defined. Please add an approver in Settings first.");
+        setAlertOpen(true);
+        return;
+      }
+      setPendingQualityAdjust(true);
+      setPinOpen(true);
+      return;
+    }
+    setScoreModalMode('adjust');
+    setScoreActorHandle(undefined);
+    setScoreModalOpen(true);
   };
 
   const displayEmoji = actualInstance?.emojiOverride ?? normalized.emoji ?? '';
   const displayTitle = actualInstance?.titleOverride ?? normalized.title;
   const displayColor = actualInstance?.colorOverride ?? normalized.color ?? '#ccc';
-  const stars = actualInstance?.stars ?? normalized.stars ?? 0;
-  const money = actualInstance?.money ?? normalized.money ?? 0;
   const completed = isCompleted;
+  const templateStars = actualInstance?.stars ?? normalized.stars ?? 0;
+  const templateMoney = actualInstance?.money ?? normalized.money ?? 0;
+  const stars =
+    completed && typeof actualInstance?.rewardStarsApplied === 'number'
+      ? actualInstance.rewardStarsApplied
+      : templateStars;
+  const money =
+    completed && typeof actualInstance?.rewardMoneyApplied === 'number'
+      ? actualInstance.rewardMoneyApplied
+      : templateMoney;
   const dueLabel = React.useMemo(() => {
     const isoDate = actualInstance?.dueAtOverride || actualInstance?.dueAt || actualInstance?.date;
     if (!isoDate) return null;
@@ -401,6 +574,27 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     if (Number.isNaN(due.getTime())) return false;
     return Date.now() > due.getTime();
   }, [actualInstance, completed]);
+  const badges = React.useMemo(() => {
+    const b: string[] = [];
+    const todayStr = getTodayString();
+    if (actualInstance) {
+      if (normalized.nonCompletable) b.push('Reminder');
+      if (actualInstance.date < todayStr) {
+        const carryState = resolveCarryOverState(normalized, actualInstance, todayStr);
+        if (carryState === 'carried') b.push('Carried over');
+        if (carryState === 'expired_carry') b.push('Expired');
+      }
+      const overdue = getOverdueState(normalized, actualInstance.date, new Date());
+      if (overdue === 'claimable') b.push('Open claim');
+      if (overdue === 'expired') b.push('Expired');
+      if (actualInstance.customConsequenceLabel?.toLowerCase().includes('waive')) b.push('Waived');
+      if (normalized.manualCompletionScore && typeof actualInstance.completionQualityPercent === 'number') {
+        b.push(`Scored ${actualInstance.completionQualityPercent}%`);
+      }
+      if (actualInstance.missConsequenceAppliedAt) b.push('Missed consequence');
+    }
+    return Array.from(new Set(b));
+  }, [actualInstance, normalized]);
 
   return (
     <div
@@ -433,13 +627,44 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             )}
           </div>
           <div className="task-reward" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span>⭐ {Number(stars)}</span>
+            <span>
+              ⭐ {Number(stars)}
+              {completed &&
+              normalized.manualCompletionScore &&
+              typeof actualInstance?.completionQualityPercent === 'number' ? (
+                <span className="helper-text" style={{ marginLeft: 6 }}>
+                  ({actualInstance.completionQualityPercent}%)
+                </span>
+              ) : null}
+            </span>
             <span>💰 ${Number(money).toFixed(2)}</span>
           </div>
+          {badges.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+              {badges.map((badge) => (
+                <span
+                  key={badge}
+                  style={{
+                    fontSize: '0.75rem',
+                    background: '#edf2f7',
+                    color: '#2d3748',
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                  }}
+                >
+                  {badge}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div className="task-actions">
-        {!(normalized.timed || typeof normalized.timedAllowedSeconds === 'number') ? (
+        {normalized.nonCompletable ? (
+          <button className="complete-btn" type="button" disabled title="Reminder items are informational only">
+            Reminder
+          </button>
+        ) : !(normalized.timed || typeof normalized.timedAllowedSeconds === 'number') ? (
           <button
             className="complete-btn"
             onClick={handleComplete}
@@ -486,13 +711,101 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
         >
           <span className="task-icon-btn-icon" aria-hidden="true">🗑️</span>
         </button>
+        {completed && (
+          <button
+            className="task-text-action-btn"
+            onClick={handleMarkUnfinished}
+            title="Mark unfinished"
+          >
+            Undo
+          </button>
+        )}
+        {(completed || !!activeTimer || !!pendingCompletionId) && (
+          <button
+            type="button"
+            className="task-text-action-btn"
+            onClick={handleResetProgress}
+            title="Reset started/completed progress"
+          >
+            Reset
+          </button>
+        )}
+        {completed && normalized.manualCompletionScore && actualInstance?.id && (
+          <button
+            type="button"
+            className="task-text-action-btn"
+            onClick={handleAdjustScore}
+            title="Change how much reward this completion earned"
+          >
+            Adjust %
+          </button>
+        )}
+        {!normalized.nonCompletable && !completed && actualInstance && (
+          <button
+            className="task-text-action-btn"
+            onClick={handleWaive}
+            title="Waive requirement and reward for this task"
+          >
+            Waive task
+          </button>
+        )}
+        <CompletionScoreModal
+          open={scoreModalOpen}
+          title={
+            scoreModalMode === 'adjust'
+              ? 'Adjust completion score'
+              : scoreModalMode === 'approve-timed'
+                ? 'Score this timed completion'
+                : 'Score this completion'
+          }
+          description={
+            scoreModalMode === 'adjust'
+              ? 'Update the quality percentage. The child’s balance will change by the difference from what was already awarded.'
+              : 'Set how much of the base reward this completion earns (stars and money scale together).'
+          }
+          initialPercent={
+            scoreModalMode === 'adjust'
+              ? actualInstance?.completionQualityPercent ?? 100
+              : 100
+          }
+          baseStars={
+            scoreModalMode === 'approve-timed' && pendingCompletion
+              ? pendingCompletion.starReward
+              : scoreModalMode === 'adjust'
+                ? Number(actualInstance?.scoreRewardBaseStars ?? templateStars)
+                : Number(templateStars)
+          }
+          baseMoney={
+            scoreModalMode === 'approve-timed' && pendingCompletion
+              ? pendingCompletion.moneyReward
+              : scoreModalMode === 'adjust'
+                ? Number(actualInstance?.scoreRewardBaseMoney ?? templateMoney)
+                : Number(templateMoney)
+          }
+          confirmLabel={scoreModalMode === 'adjust' ? 'Update reward' : 'Complete'}
+          onConfirm={handleScoreModalConfirm}
+          onCancel={handleScoreModalCancel}
+        />
         <PinModal 
           open={pinOpen} 
-          onClose={() => { setPinOpen(false); setPendingCompletionActionId(null); setPendingDeleteAction(null); }} 
+          onClose={() => {
+            setPinOpen(false);
+            setPendingCompletionActionId(null);
+            setPendingDeleteAction(null);
+            setScoreModalOpen(false);
+            setScoreModalMode(null);
+            setScoreActorHandle(undefined);
+            setPendingQualityAdjust(false);
+            setPendingResetProgress(false);
+          }} 
           onSuccess={onPinSuccess} 
           message={
             pendingDeleteAction
               ? "Enter a parent PIN to delete or disable this task."
+              : pendingResetProgress
+                ? "Enter a parent PIN to reset this task’s progress."
+              : pendingQualityAdjust
+                ? "Enter a parent PIN to adjust this completion score."
               : pendingCompletionActionId && pendingCompletionId
                 ? (applyMoneyOnApprove ? "Approve this timed completion?" : "Forgive money for this timed completion?")
                 : "Enter a parent PIN to complete this task."

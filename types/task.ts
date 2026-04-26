@@ -28,6 +28,76 @@ export interface TaskAssignmentSettings {
   sequenceId?: string;
 }
 
+export type OverduePolicy = 'none' | 'expire' | 'open_claim' | 'grace_then_open';
+export type CarryOverPolicy = 'carry_none' | 'carry_until_complete' | 'carry_with_max_days';
+export type MissConsequenceType =
+  | 'none'
+  | 'money_penalty'
+  | 'star_penalty'
+  | 'reward_zero'
+  | 'custom_consequence'
+  /** Money and/or star penalties, optional forfeit of base reward, optional note — use when more than one lever applies. */
+  | 'combined';
+export type MoneyPolicyMode = 'simple' | 'tiered' | 'continuous';
+export type MoneyDeltaType = 'absolute' | 'delta' | 'multiplier';
+export type ConsequenceTrigger =
+  | 'on_time'
+  | 'late'
+  | 'expired'
+  | 'missed_day_rollover'
+  | 'manual_parent_action'
+  | 'undone_by_cutoff';
+
+export interface MissConsequenceConfig {
+  type: MissConsequenceType;
+  moneyAmount?: number;
+  starAmount?: number;
+  customLabel?: string;
+  /** When true, a miss does not grant this task’s base stars/money (can be combined with penalties). */
+  zeroBaseReward?: boolean;
+}
+
+export interface MoneyTierRule {
+  id: string;
+  fromMinutesLate: number;
+  toMinutesLate?: number;
+  moneyDeltaType: MoneyDeltaType;
+  value: number;
+}
+
+export interface UndonePenaltyRule {
+  enabled: boolean;
+  cutoffMode: 'end_of_day' | 'next_due' | 'deadline';
+  cutoffAt?: string;
+  moneyDeltaType?: MoneyDeltaType;
+  value?: number;
+}
+
+export interface ContinuousMoneyPolicy {
+  ratePerMinuteLate: number;
+  minPayout?: number;
+  maxPayout?: number;
+  cutoffMinutes?: number;
+  postCutoffFixedPayout?: number;
+}
+
+export interface MoneyPolicy {
+  mode: MoneyPolicyMode;
+  tiers?: MoneyTierRule[];
+  continuous?: ContinuousMoneyPolicy;
+  undonePenalty?: UndonePenaltyRule;
+}
+
+export interface ConsequenceRule {
+  id: string;
+  trigger: ConsequenceTrigger;
+  moneyDeltaType?: MoneyDeltaType;
+  moneyValue?: number;
+  starDelta?: number;
+  rewardMultiplier?: number;
+  customConsequenceLabel?: string;
+}
+
 export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface RecurrenceEnd {
@@ -100,6 +170,18 @@ export interface TaskBase {
   createdAt: string; // ISO timestamp
   schedule?: ScheduleDefinition; // advanced recurrence metadata
   tags?: string[];
+  overduePolicy?: OverduePolicy;
+  graceMinutes?: number;
+  lateRewardMode?: 'full' | 'money_forfeit' | 'scaled_penalty' | 'none';
+  carryOverPolicy?: CarryOverPolicy;
+  carryMaxDays?: number;
+  missConsequence?: MissConsequenceConfig;
+  moneyPolicy?: MoneyPolicy;
+  consequenceRules?: ConsequenceRule[];
+  /** Parent sets 0–100% quality when completing (or approving timed); rewards scale from base stars/money. */
+  manualCompletionScore?: boolean;
+  /** When true, task is shown as reminder/note and is not completable by children. */
+  nonCompletable?: boolean;
 }
 
 export interface TimedSettings {
@@ -196,6 +278,33 @@ export interface TaskInstance {
   completedAt?: string; // ISO timestamp when completed
   // For timed tasks
   timedCompletionId?: string; // reference to TimedCompletion if this was a timed task
+  claimedByChildId?: number;
+  claimedAt?: string;
+  originalAssignedChildId?: number;
+  sourceDueDate?: string;
+  carryDays?: number;
+  consequenceApplied?: boolean;
+  appliedMoneyTierId?: string;
+  undonePenaltyAppliedAt?: string;
+  customConsequenceLabel?: string;
+  /** Parent quality score 0–100 applied to base rewards (set when using manual completion score). */
+  completionQualityPercent?: number;
+  /** Base stars used for quality scaling (snapshot at completion). */
+  scoreRewardBaseStars?: number;
+  /** Base money used for quality scaling (snapshot at completion). */
+  scoreRewardBaseMoney?: number;
+  /** Stars actually granted after quality multiplier. */
+  rewardStarsApplied?: number;
+  /** Money actually granted after quality multiplier. */
+  rewardMoneyApplied?: number;
+  /** True when timed completion was approved with money forgiveness. */
+  rewardMoneySuppressed?: boolean;
+  /** When miss consequence was applied to this instance. */
+  missConsequenceAppliedAt?: string;
+  /** Star delta applied by miss consequence action. */
+  missConsequenceStarDelta?: number;
+  /** Money delta applied by miss consequence action. */
+  missConsequenceMoneyDelta?: number;
   // Metadata
   createdAt: string; // ISO timestamp when instance was created
   notes?: string; // optional notes for this instance
