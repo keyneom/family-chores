@@ -69,6 +69,8 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const [scoreActorHandle, setScoreActorHandle] = React.useState<string | undefined>(undefined);
   const [pendingQualityAdjust, setPendingQualityAdjust] = React.useState(false);
   const [pendingResetProgress, setPendingResetProgress] = React.useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = React.useState(false);
+  const actionsMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [pendingDeleteAction, setPendingDeleteAction] = React.useState<{
     option: DeleteOption;
     taskId: string;
@@ -578,7 +580,6 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     const b: string[] = [];
     const todayStr = getTodayString();
     if (actualInstance) {
-      if (normalized.nonCompletable) b.push('Reminder');
       if (actualInstance.date < todayStr) {
         const carryState = resolveCarryOverState(normalized, actualInstance, todayStr);
         if (carryState === 'carried') b.push('Carried over');
@@ -595,6 +596,25 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     }
     return Array.from(new Set(b));
   }, [actualInstance, normalized]);
+
+  React.useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const onDocMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (actionsMenuRef.current?.contains(target)) return;
+      setActionsMenuOpen(false);
+    };
+    const onDocEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onDocEscape);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onDocEscape);
+    };
+  }, [actionsMenuOpen]);
 
   return (
     <div
@@ -693,62 +713,84 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             </button>
           )
         )}
-        <button
-          className="task-icon-btn btn-edit"
-          onClick={handleEdit}
-          title={`Edit task: ${displayTitle}`}
-          aria-label={`Edit task: ${displayTitle}`}
-          data-task-id={normalized.id}
-          data-task-title={displayTitle}
-        >
-          <span className="task-icon-btn-icon" aria-hidden="true">✏️</span>
-        </button>
-        <button
-          className="task-icon-btn btn-danger"
-          onClick={handleDelete}
-          title="Delete task"
-          aria-label={`Delete task: ${displayTitle}`}
-        >
-          <span className="task-icon-btn-icon" aria-hidden="true">🗑️</span>
-        </button>
-        {completed && (
-          <button
-            className="task-text-action-btn"
-            onClick={handleMarkUnfinished}
-            title="Mark unfinished"
-          >
-            Undo
-          </button>
-        )}
-        {(completed || !!activeTimer || !!pendingCompletionId) && (
+        <div className="task-actions-menu-wrap" ref={actionsMenuRef}>
           <button
             type="button"
-            className="task-text-action-btn"
-            onClick={handleResetProgress}
-            title="Reset started/completed progress"
+            className="task-icon-btn task-menu-btn"
+            aria-haspopup="menu"
+            aria-expanded={actionsMenuOpen}
+            onClick={() => setActionsMenuOpen((v) => !v)}
+            title="More actions"
           >
-            Reset
+            <span className="task-icon-btn-icon" aria-hidden="true">⋯</span>
           </button>
-        )}
-        {completed && normalized.manualCompletionScore && actualInstance?.id && (
-          <button
-            type="button"
-            className="task-text-action-btn"
-            onClick={handleAdjustScore}
-            title="Change how much reward this completion earned"
-          >
-            Adjust %
-          </button>
-        )}
-        {!normalized.nonCompletable && !completed && actualInstance && (
-          <button
-            className="task-text-action-btn"
-            onClick={handleWaive}
-            title="Waive requirement and reward for this task"
-          >
-            Waive task
-          </button>
-        )}
+          {actionsMenuOpen && (
+            <div className="task-actions-menu" role="menu">
+              <button
+                className="task-actions-menu-item"
+                onClick={() => { setActionsMenuOpen(false); handleEdit(); }}
+                title={`Edit task: ${displayTitle}`}
+                aria-label={`Edit task: ${displayTitle}`}
+                data-task-id={normalized.id}
+                data-task-title={displayTitle}
+                role="menuitem"
+              >
+                Edit
+              </button>
+              <button
+                className="task-actions-menu-item danger"
+                onClick={() => { setActionsMenuOpen(false); handleDelete(); }}
+                title="Delete task"
+                aria-label={`Delete task: ${displayTitle}`}
+                role="menuitem"
+              >
+                Delete
+              </button>
+              {completed && (
+                <button
+                  className="task-actions-menu-item"
+                  onClick={() => { setActionsMenuOpen(false); handleMarkUnfinished(); }}
+                  title="Mark unfinished"
+                  role="menuitem"
+                >
+                  Undo
+                </button>
+              )}
+              {(completed || !!activeTimer || !!pendingCompletionId) && (
+                <button
+                  type="button"
+                  className="task-actions-menu-item"
+                  onClick={() => { setActionsMenuOpen(false); handleResetProgress(); }}
+                  title="Reset started/completed progress"
+                  role="menuitem"
+                >
+                  Reset
+                </button>
+              )}
+              {completed && normalized.manualCompletionScore && actualInstance?.id && (
+                <button
+                  type="button"
+                  className="task-actions-menu-item"
+                  onClick={() => { setActionsMenuOpen(false); handleAdjustScore(); }}
+                  title="Change how much reward this completion earned"
+                  role="menuitem"
+                >
+                  Adjust %
+                </button>
+              )}
+              {!normalized.nonCompletable && !completed && actualInstance && (
+                <button
+                  className="task-actions-menu-item"
+                  onClick={() => { setActionsMenuOpen(false); handleWaive(); }}
+                  title="Waive requirement and reward for this task"
+                  role="menuitem"
+                >
+                  Waive task
+                </button>
+              )}
+            </div>
+          )}
+        </div>
         <CompletionScoreModal
           open={scoreModalOpen}
           title={

@@ -14,10 +14,17 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
   const { state } = useChoresApp();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const pinInputRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
     setPin("");
     setError("");
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    pinInputRef.current?.focus();
+    pinInputRef.current?.select();
   }, [open]);
 
   if (!open) return null;
@@ -69,6 +76,7 @@ export default function PinModal({ open, onClose, message, onSuccess }: PinModal
           <div className="input-group">
             <label>PIN:</label>
             <input
+              ref={pinInputRef}
               type="password"
               placeholder="Enter PIN (4-12 digits)"
               minLength={4}
