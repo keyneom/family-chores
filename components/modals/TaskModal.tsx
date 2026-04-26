@@ -20,6 +20,7 @@ import { getNextExecutionDateTimes, describeSchedule, buildCronExpressionFromRul
 import { getTheoreticalAssignment } from "../../utils/projectionUtils";
 import { computeDueAt } from "../../utils/taskInstanceGeneration";
 import { getLocalDateTimeString, getLocalDateString } from "../../utils/dateUtils";
+import { hasCustomConsequenceRules } from "../../utils/consequenceEngine";
 import {
   buildMissConsequencePayload,
   missConsequenceToFormState,
@@ -86,7 +87,7 @@ function taskHasAdvancedPolicy(task: Task): boolean {
   const undone = mp?.undonePenalty?.value;
   if (undone !== undefined && Number(undone) !== -2) return true;
 
-  if (task.consequenceRules && task.consequenceRules.length > 0) return true;
+  if (hasCustomConsequenceRules(task)) return true;
 
   if (task.manualCompletionScore) return true;
 
@@ -157,6 +158,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [showAdvancedPolicy, setShowAdvancedPolicy] = useState(false);
   const [manualCompletionScore, setManualCompletionScore] = useState(false);
   const [nonCompletable, setNonCompletable] = useState(false);
+  const usesAdvancedTimerPayout = isTimed && moneyPolicyMode !== 'simple';
 
   useEffect(() => {
     const today = getLocalDateString();
@@ -247,7 +249,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       if (initialTask.timed) {
         setIsTimed(true);
         setAllowedMinutes(Math.round((initialTask.timed.allowedSeconds || 60) / 60));
-        setLatePenaltyPercent((initialTask.timed.latePenaltyPercent ?? 0) * 100);
+        setLatePenaltyPercent((initialTask.timed.latePenaltyPercent ?? 0.5) * 100);
         setAutoApproveOnStop(Boolean(initialTask.timed.autoApproveOnStop));
       } else {
         setIsTimed(false);
@@ -1412,18 +1414,24 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     />
                   </label>
                   <label htmlFor="timed-late-penalty">
-                    Late Payout (%):
+                    Late Timer Payout (%):
                     <input 
                       id="timed-late-penalty"
                       name="timed-late-penalty"
                       type="number" 
                       value={latePenaltyPercent} 
                       min={-500}
+                      disabled={usesAdvancedTimerPayout}
                       onChange={e => setLatePenaltyPercent(Number(e.target.value))} 
                     />
                   <p className="helper-text">
                     50 = half reward when late; 0 = no money; -50 = child loses half the base money reward.
                   </p>
+                  {usesAdvancedTimerPayout && (
+                    <p className="helper-text" style={{ marginTop: 4 }}>
+                      Advanced Timer Money Rules are enabled below, so this percentage is currently ignored.
+                    </p>
+                  )}
                   </label>
                   <label htmlFor="timed-auto-approve">
                     Auto-approve on Stop:
@@ -1466,9 +1474,9 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                   <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
                     Overdue, Carry-over, and Consequences
                   </legend>
-                  {initialTask?.consequenceRules && initialTask.consequenceRules.length > 0 && (
+                  {initialTask && hasCustomConsequenceRules(initialTask) && (
                     <p className="helper-text" style={{ marginTop: 0 }}>
-                      Legacy/custom timed consequence rules are already active for this task. Some timing behavior may come from those rules.
+                      Custom consequence rules are active for this task. These override the default timer payout behavior.
                     </p>
                   )}
                   <h4 style={{ margin: '8px 0 6px', fontSize: '0.95rem' }}>Who can complete after due time</h4>
@@ -1588,37 +1596,101 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
 
                 <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '12px', marginTop: '12px' }}>
                   <legend style={{ padding: '0 8px', fontSize: '0.9rem', fontWeight: 600, color: '#4a5568' }}>
-                    If completed late
+                    {isTimed ? 'Advanced Timer Money Rules' : 'Scheduled Late Money Rules'}
                   </legend>
-                  <label htmlFor="money-policy-mode">
-                    Money Policy Mode:
-                    <select id="money-policy-mode" value={moneyPolicyMode} onChange={(e) => setMoneyPolicyMode(e.target.value as MoneyPolicyMode)}>
-                      <option value="simple">Simple (base reward)</option>
-                      <option value="tiered">Tiered windows</option>
-                      <option value="continuous">Continuous decay ($/minute)</option>
-                    </select>
-                  </label>
-                  {moneyPolicyMode === 'tiered' && (
+                  {isTimed ? (
                     <>
-                      <label htmlFor="tier-0-15">0-15 min late payout:
-                        <input id="tier-0-15" type="number" step="0.01" value={tier0to15} onChange={(e) => setTier0to15(Number(e.target.value))} />
+                      <label htmlFor="use-advanced-timer-money-rules" style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                        <input
+                          id="use-advanced-timer-money-rules"
+                          type="checkbox"
+                          checked={usesAdvancedTimerPayout}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setMoneyPolicyMode((prev) => (prev === 'simple' ? 'tiered' : prev));
+                            } else {
+                              setMoneyPolicyMode('simple');
+                            }
+                          }}
+                        />
+                        <span>Override the timer percentage with advanced timer payout rules.</span>
                       </label>
-                      <label htmlFor="tier-15-30">15-30 min late payout:
-                        <input id="tier-15-30" type="number" step="0.01" value={tier15to30} onChange={(e) => setTier15to30(Number(e.target.value))} />
-                      </label>
-                      <label htmlFor="tier-30-plus">&gt;30 min late payout:
-                        <input id="tier-30-plus" type="number" step="0.01" value={tier30plus} onChange={(e) => setTier30plus(Number(e.target.value))} />
-                      </label>
+                      {!usesAdvancedTimerPayout && (
+                        <p className="helper-text" style={{ marginTop: 6 }}>
+                          Using only Late Timer Payout (%) from Timer Settings.
+                        </p>
+                      )}
+                      {usesAdvancedTimerPayout && (
+                        <>
+                          <label htmlFor="money-policy-mode">
+                            Advanced timer rule mode:
+                            <select id="money-policy-mode" value={moneyPolicyMode} onChange={(e) => setMoneyPolicyMode(e.target.value as MoneyPolicyMode)}>
+                              <option value="tiered">Tiered windows</option>
+                              <option value="continuous">Continuous decay ($/minute)</option>
+                            </select>
+                          </label>
+                          {moneyPolicyMode === 'tiered' && (
+                            <>
+                              <label htmlFor="tier-0-15">0-15 min late payout:
+                                <input id="tier-0-15" type="number" step="0.01" value={tier0to15} onChange={(e) => setTier0to15(Number(e.target.value))} />
+                              </label>
+                              <label htmlFor="tier-15-30">15-30 min late payout:
+                                <input id="tier-15-30" type="number" step="0.01" value={tier15to30} onChange={(e) => setTier15to30(Number(e.target.value))} />
+                              </label>
+                              <label htmlFor="tier-30-plus">&gt;30 min late payout:
+                                <input id="tier-30-plus" type="number" step="0.01" value={tier30plus} onChange={(e) => setTier30plus(Number(e.target.value))} />
+                              </label>
+                            </>
+                          )}
+                          {moneyPolicyMode === 'continuous' && (
+                            <>
+                              <label htmlFor="continuous-rate">Subtract $ per minute late:
+                                <input id="continuous-rate" type="number" step="0.01" min={0} value={continuousRatePerMinute} onChange={(e) => setContinuousRatePerMinute(Number(e.target.value))} />
+                              </label>
+                              <label htmlFor="continuous-min-payout">Minimum payout:
+                                <input id="continuous-min-payout" type="number" step="0.01" value={continuousMinPayout} onChange={(e) => setContinuousMinPayout(Number(e.target.value))} />
+                              </label>
+                            </>
+                          )}
+                        </>
+                      )}
                     </>
-                  )}
-                  {moneyPolicyMode === 'continuous' && (
+                  ) : (
                     <>
-                      <label htmlFor="continuous-rate">Subtract $ per minute late:
-                        <input id="continuous-rate" type="number" step="0.01" min={0} value={continuousRatePerMinute} onChange={(e) => setContinuousRatePerMinute(Number(e.target.value))} />
+                      <p className="helper-text" style={{ marginTop: 0 }}>
+                        For non-timed tasks, use these rules to define money outcomes when completion happens after due time.
+                      </p>
+                      <label htmlFor="money-policy-mode">
+                        Money Policy Mode:
+                        <select id="money-policy-mode" value={moneyPolicyMode} onChange={(e) => setMoneyPolicyMode(e.target.value as MoneyPolicyMode)}>
+                          <option value="simple">Simple (base reward)</option>
+                          <option value="tiered">Tiered windows</option>
+                          <option value="continuous">Continuous decay ($/minute)</option>
+                        </select>
                       </label>
-                      <label htmlFor="continuous-min-payout">Minimum payout:
-                        <input id="continuous-min-payout" type="number" step="0.01" value={continuousMinPayout} onChange={(e) => setContinuousMinPayout(Number(e.target.value))} />
-                      </label>
+                      {moneyPolicyMode === 'tiered' && (
+                        <>
+                          <label htmlFor="tier-0-15">0-15 min late payout:
+                            <input id="tier-0-15" type="number" step="0.01" value={tier0to15} onChange={(e) => setTier0to15(Number(e.target.value))} />
+                          </label>
+                          <label htmlFor="tier-15-30">15-30 min late payout:
+                            <input id="tier-15-30" type="number" step="0.01" value={tier15to30} onChange={(e) => setTier15to30(Number(e.target.value))} />
+                          </label>
+                          <label htmlFor="tier-30-plus">&gt;30 min late payout:
+                            <input id="tier-30-plus" type="number" step="0.01" value={tier30plus} onChange={(e) => setTier30plus(Number(e.target.value))} />
+                          </label>
+                        </>
+                      )}
+                      {moneyPolicyMode === 'continuous' && (
+                        <>
+                          <label htmlFor="continuous-rate">Subtract $ per minute late:
+                            <input id="continuous-rate" type="number" step="0.01" min={0} value={continuousRatePerMinute} onChange={(e) => setContinuousRatePerMinute(Number(e.target.value))} />
+                          </label>
+                          <label htmlFor="continuous-min-payout">Minimum payout:
+                            <input id="continuous-min-payout" type="number" step="0.01" value={continuousMinPayout} onChange={(e) => setContinuousMinPayout(Number(e.target.value))} />
+                          </label>
+                        </>
+                      )}
                     </>
                   )}
                   <label htmlFor="enable-undone-penalty" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10 }}>

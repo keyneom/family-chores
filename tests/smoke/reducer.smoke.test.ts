@@ -163,6 +163,59 @@ describe('Smoke: reducer core workflows', () => {
     expect(state.children.find((c) => c.id === 1)?.money).toBe(expectedMoney);
   });
 
+  it('migrates existing timed tasks with generated rules and legacy debt notation', () => {
+    const timedTask = makeTimedTask({
+      id: 'task_migrate_legacy',
+      money: 2,
+      timed: {
+        allowedSeconds: 300,
+        latePenaltyPercent: 1.5,
+        autoApproveOnStop: false,
+        allowNegative: true,
+      },
+      consequenceRules: [
+        { id: 'task_migrate_legacy_on_time_default', trigger: 'on_time', rewardMultiplier: 1 },
+        { id: 'task_migrate_legacy_late_default', trigger: 'late', rewardMultiplier: -0.5, starDelta: 0 },
+      ],
+    });
+    const taskKey = buildTaskKey(1, timedTask.id, '2026-04-21');
+    let state = makeBaseState({
+      tasks: [timedTask],
+      taskInstances: [
+        makeTaskInstance({
+          id: 'inst_migrate_legacy',
+          templateId: timedTask.id,
+          date: '2026-04-21',
+          childId: 1,
+        }),
+      ],
+      timers: {
+        timer_migrate_legacy: {
+          id: 'timer_migrate_legacy',
+          taskKey,
+          childId: 1,
+          startedAt: '2026-04-21T10:00:00.000Z',
+          allowedSeconds: 300,
+        },
+      },
+    });
+    state = choresAppReducer(state, { type: 'SET_STATE', payload: state });
+    expect(state.tasks[0].timed?.latePenaltyPercent).toBe(-0.5);
+    expect(state.tasks[0].consequenceRules).toBeUndefined();
+
+    state = choresAppReducer(state, {
+      type: 'STOP_TIMER',
+      payload: { timerId: 'timer_migrate_legacy', stoppedAt: '2026-04-21T10:06:00.000Z' },
+    });
+    const completion = state.timedCompletions?.[0];
+    expect(completion?.moneyReward).toBe(-1);
+    state = choresAppReducer(state, {
+      type: 'APPROVE_TIMED_COMPLETION',
+      payload: { completionId: completion!.id, approve: true, applyMoney: true },
+    });
+    expect(state.children.find((c) => c.id === 1)?.money).toBe(-1);
+  });
+
   it('applies combined missed consequence once when carry-over expires', () => {
     const task = makeRecurringTask({
       id: 'task_miss_policy',

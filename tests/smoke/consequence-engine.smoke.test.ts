@@ -3,7 +3,9 @@ import type { Task, TaskInstance } from '../../types/task';
 import {
   applyUndonePenaltyIfDue,
   evaluateConsequenceRules,
+  hasCustomConsequenceRules,
   legacyTimedToConsequenceRules,
+  migrateTimedConsequenceConfig,
   resolveContinuousMoneyOutcome,
   resolveMoneyTier,
   resolveTimedOutcome,
@@ -74,6 +76,39 @@ describe('Smoke: consequence engine', () => {
     const late = resolveTimedOutcome(normalized, 90, 60);
     expect(late.moneyReward).toBe(expectedMoney);
     expect(late.starReward).toBe(0);
+  });
+
+  it('migrates legacy timed debt notation and strips generated timed rules', () => {
+    const task: Task = makeTimedTask({
+      id: 'task_legacy',
+      money: 2,
+      timed: { allowedSeconds: 60, latePenaltyPercent: 1.5, autoApproveOnStop: false, allowNegative: true },
+      consequenceRules: [
+        { id: 'task_legacy_on_time_default', trigger: 'on_time', rewardMultiplier: 1 },
+        { id: 'task_legacy_late_default', trigger: 'late', rewardMultiplier: -0.5, starDelta: 0 },
+      ],
+    });
+    const migrated = migrateTimedConsequenceConfig(task);
+    expect(migrated.timed?.latePenaltyPercent).toBe(-0.5);
+    expect(migrated.timed?.allowNegative).toBe(true);
+    expect(migrated.consequenceRules).toBeUndefined();
+    expect(hasCustomConsequenceRules(migrated)).toBe(false);
+    expect(resolveTimedOutcome(migrated, 90, 60).moneyReward).toBe(-1);
+  });
+
+  it('preserves truly custom consequence rules during migration', () => {
+    const task: Task = makeTimedTask({
+      id: 'task_custom',
+      money: 2,
+      timed: { allowedSeconds: 60, latePenaltyPercent: -0.5, autoApproveOnStop: false, allowNegative: true },
+      consequenceRules: [
+        { id: 'custom_late_rule', trigger: 'late', moneyDeltaType: 'absolute', moneyValue: -0.25, starDelta: 0 },
+      ],
+    });
+    const migrated = migrateTimedConsequenceConfig(task);
+    expect(migrated.consequenceRules).toHaveLength(1);
+    expect(hasCustomConsequenceRules(migrated)).toBe(true);
+    expect(resolveTimedOutcome(migrated, 90, 60).moneyReward).toBe(-0.25);
   });
 
   it('applies undone penalty once', () => {

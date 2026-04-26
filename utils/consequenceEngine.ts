@@ -25,6 +25,51 @@ export interface ConsequenceOutcome {
   zeroBaseReward?: boolean;
 }
 
+function isGeneratedTimedRule(taskId: string, rule: ConsequenceRule): boolean {
+  const id = String(rule.id || '');
+  if (id === `${taskId}_on_time_default`) {
+    return rule.trigger === 'on_time';
+  }
+  if (id === `${taskId}_late_default`) {
+    return rule.trigger === 'late' && (rule.starDelta === 0 || typeof rule.starDelta === 'undefined');
+  }
+  return false;
+}
+
+function normalizeTimedDebtNotation(task: Task): Task {
+  if (!task.timed) return task;
+  const timed = { ...task.timed };
+  const pct = timed.latePenaltyPercent;
+  if (typeof pct === 'number') {
+    if (pct < 0 && !timed.allowNegative) {
+      timed.allowNegative = true;
+    }
+    // Legacy notation used values > 1 to mean debt (e.g., 1.5 meant -50% payout).
+    if (timed.allowNegative && pct > 1) {
+      timed.latePenaltyPercent = -(pct - 1);
+    }
+  }
+  return { ...task, timed };
+}
+
+export function migrateTimedConsequenceConfig(task: Task): Task {
+  const normalizedTimed = normalizeTimedDebtNotation(task);
+  if (!normalizedTimed.timed) return normalizedTimed;
+  const rules = normalizedTimed.consequenceRules || [];
+  if (rules.length === 0) return normalizedTimed;
+  const remaining = rules.filter((rule) => !isGeneratedTimedRule(normalizedTimed.id, rule));
+  if (remaining.length === rules.length) return normalizedTimed;
+  return {
+    ...normalizedTimed,
+    consequenceRules: remaining.length > 0 ? remaining : undefined,
+  };
+}
+
+export function hasCustomConsequenceRules(task: Task): boolean {
+  const migrated = migrateTimedConsequenceConfig(task);
+  return Boolean(migrated.consequenceRules && migrated.consequenceRules.length > 0);
+}
+
 function applyMoneyDelta(baseMoney: number, deltaType: MoneyDeltaType, value: number): number {
   if (deltaType === 'absolute') return value;
   if (deltaType === 'delta') return baseMoney + value;

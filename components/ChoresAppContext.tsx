@@ -18,7 +18,7 @@ import { deriveDueTimeFromCron } from "../utils/recurrenceBuilder";
 import { getLocalDateTimeString, parseLocalDate } from "../utils/dateUtils";
 import {
   applyUndonePenaltyIfDue,
-  legacyTimedToConsequenceRules,
+  migrateTimedConsequenceConfig,
   resolveMissConsequenceOutcome,
   resolveTimedOutcome,
 } from "../utils/consequenceEngine";
@@ -496,27 +496,27 @@ function buildRotationSettings(
 }
 
 function normalizeTaskPayload(task: Task): Task {
+  const migratedTask = migrateTimedConsequenceConfig(task);
   const assignedChildIds =
-    sanitizeChildIds(task.assignedChildIds || []) ||
-    (typeof task.assignedTo !== "undefined"
-      ? sanitizeChildIds([task.assignedTo])
+    sanitizeChildIds(migratedTask.assignedChildIds || []) ||
+    (typeof migratedTask.assignedTo !== "undefined"
+      ? sanitizeChildIds([migratedTask.assignedTo])
       : undefined);
 
-  const assignment = buildAssignmentSettings(task, assignedChildIds);
-  const rotation = buildRotationSettings(task, assignedChildIds, assignment);
-  const schedule = normalizeScheduleDefinition(task);
-  const normalizedDueDate = normalizeLocalDateTimeString(task.oneOff?.dueDate);
-  const oneOff = task.oneOff
-    ? { ...task.oneOff, ...(normalizedDueDate ? { dueDate: normalizedDueDate } : {}) }
+  const assignment = buildAssignmentSettings(migratedTask, assignedChildIds);
+  const rotation = buildRotationSettings(migratedTask, assignedChildIds, assignment);
+  const schedule = normalizeScheduleDefinition(migratedTask);
+  const normalizedDueDate = normalizeLocalDateTimeString(migratedTask.oneOff?.dueDate);
+  const oneOff = migratedTask.oneOff
+    ? { ...migratedTask.oneOff, ...(normalizedDueDate ? { dueDate: normalizedDueDate } : {}) }
     : undefined;
 
   return {
-    ...task,
+    ...migratedTask,
     assignedChildIds,
     assignment,
     rotation,
     schedule,
-    consequenceRules: legacyTimedToConsequenceRules(task),
     ...(oneOff ? { oneOff } : {}),
   };
 }
