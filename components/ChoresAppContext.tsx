@@ -228,7 +228,7 @@ type ChoresAppAction =
   | { type: "UPDATE_TASK_INSTANCE"; payload: TaskInstance; actorHandle?: string | null }
   | { type: "DELETE_TASK_INSTANCE"; payload: string; actorHandle?: string | null } // instance id
   | { type: "COMPLETE_TASK"; payload: { taskKey: string; childId: number; starReward: number; moneyReward: number; qualityScorePercent?: number }; actorHandle?: string | null } // Legacy
-  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number; qualityScorePercent?: number }; actorHandle?: string | null }
+  | { type: "COMPLETE_TASK_INSTANCE"; payload: { instanceId: string; childId: number; starReward: number; moneyReward: number; qualityScorePercent?: number; completedAt?: string }; actorHandle?: string | null }
   | { type: "RESET_TASK_PROGRESS"; payload: { taskKey: string; childId: number; instanceId?: string }; actorHandle?: string | null }
   | { type: "ADJUST_INSTANCE_COMPLETION_QUALITY"; payload: { instanceId: string; childId: number; qualityScorePercent: number }; actorHandle?: string | null }
   | { type: "MARK_TASK_UNFINISHED"; payload: { instanceId: string; childId: number; starDelta?: number; moneyDelta?: number }; actorHandle?: string | null }
@@ -703,7 +703,7 @@ export function choresAppReducer(state: ChoresAppState, action: ChoresAppAction)
             ? {
                 ...inst,
                 completed: true,
-                completedAt: new Date().toISOString(),
+                completedAt: action.payload.completedAt || new Date().toISOString(),
                 ...snapshotOverrides,
                 completionQualityPercent: pct,
                 scoreRewardBaseStars: baseStars,

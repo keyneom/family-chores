@@ -121,6 +121,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
   const [cronExpression, setCronExpression] = useState("0 17 * * *");
   const [oneOffDate, setOneOffDate] = useState(() => getLocalDateString());
   const [oneOffTime, setOneOffTime] = useState("17:00");
+  const [createAsCompleted, setCreateAsCompleted] = useState(false);
+  const [retroCompletedAtLocal, setRetroCompletedAtLocal] = useState(() => getLocalDateTimeString(new Date()));
 
   // timed fields
   const [allowedMinutes, setAllowedMinutes] = useState(5);
@@ -245,6 +247,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
         const dueTime = due.split('T')[1]?.slice(0,5) || "17:00";
         setOneOffTime(dueTime);
       }
+      setCreateAsCompleted(false);
+      setRetroCompletedAtLocal(getLocalDateTimeString(new Date()));
       // Check if task has timed settings (can be on recurring or oneoff)
       if (initialTask.timed) {
         setIsTimed(true);
@@ -330,6 +334,8 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
       setCronExpression('0 17 * * *');
       setOneOffDate(getLocalDateString());
       setOneOffTime('17:00');
+      setCreateAsCompleted(false);
+      setRetroCompletedAtLocal(getLocalDateTimeString(new Date()));
       setStartDate(today);
       setEndMode('never');
       setEndDate(today);
@@ -749,6 +755,19 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
           };
           
           dispatch({ type: 'ADD_TASK_INSTANCE', payload: instance });
+          if (createAsCompleted) {
+            dispatch({
+              type: 'COMPLETE_TASK_INSTANCE',
+              payload: {
+                instanceId: instance.id,
+                childId: child.id,
+                starReward: Number(task.stars || 0),
+                moneyReward: Number(task.money || 0),
+                completedAt: new Date(retroCompletedAtLocal).toISOString(),
+              },
+              actorHandle,
+            });
+          }
         });
       }
     }
@@ -1381,6 +1400,30 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     onChange={e => setOneOffTime(e.target.value)}
                   />
                 </label>
+                {!editingId && (
+                  <>
+                    <label htmlFor="oneoff-create-completed" style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <input
+                        id="oneoff-create-completed"
+                        type="checkbox"
+                        checked={createAsCompleted}
+                        onChange={(e) => setCreateAsCompleted(e.target.checked)}
+                      />
+                      <span>Create this one-off as already completed (retroactive log).</span>
+                    </label>
+                    {createAsCompleted && (
+                      <label htmlFor="oneoff-completed-at">
+                        Completed At:
+                        <input
+                          id="oneoff-completed-at"
+                          type="datetime-local"
+                          value={retroCompletedAtLocal}
+                          onChange={(e) => setRetroCompletedAtLocal(e.target.value)}
+                        />
+                      </label>
+                    )}
+                  </>
+                )}
               </fieldset>
             )}
 

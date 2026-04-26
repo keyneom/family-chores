@@ -5,13 +5,14 @@ import { useModalControl } from "./ModalControlContext";
 import PinModal from "./modals/PinModal";
 import AlertModal from "./modals/AlertModal";
 import CompletionScoreModal from "./modals/CompletionScoreModal";
+import RetroactiveCompletionModal from "./modals/RetroactiveCompletionModal";
 import DeleteTaskModal, { DeleteOption } from "./modals/DeleteTaskModal";
 import EditTaskConfirmModal, { EditOption } from "./modals/EditTaskConfirmModal";
 import TimedCountdown from "./TimedCountdown";
 import useTimer from "./hooks/useTimer";
 import useTimerAnnouncements from "./hooks/useTimerAnnouncements";
 import type { Task, TimedCompletion, TaskInstance } from "../types/task";
-import { getTodayString } from "../utils/dateUtils";
+import { getLocalDateTimeString, getTodayString } from "../utils/dateUtils";
 import { formatDateTimeCompact } from "../utils/dateUtils";
 import { buildTaskKey, parseTaskKey } from "../utils/taskKey";
 import { requiresPin, hasApprovers } from "../utils/approvalUtils";
@@ -69,6 +70,10 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
   const [scoreActorHandle, setScoreActorHandle] = React.useState<string | undefined>(undefined);
   const [pendingQualityAdjust, setPendingQualityAdjust] = React.useState(false);
   const [pendingResetProgress, setPendingResetProgress] = React.useState(false);
+  const [retroModalOpen, setRetroModalOpen] = React.useState(false);
+  const [retroTreatAsOnTime, setRetroTreatAsOnTime] = React.useState(true);
+  const [retroCompletedAtIso, setRetroCompletedAtIso] = React.useState<string>("");
+  const [pendingRetroCompletion, setPendingRetroCompletion] = React.useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = React.useState(false);
   const actionsMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [pendingDeleteAction, setPendingDeleteAction] = React.useState<{
@@ -213,7 +218,12 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     performCompletion();
   };
 
-  const performCompletion = (actorHandle?: string, qualityScorePercent?: number) => {
+  const performCompletion = (
+    actorHandle?: string,
+    qualityScorePercent?: number,
+    completedAt?: string,
+    rewardOverride?: { stars: number; money: number },
+  ) => {
     if (actualInstance) {
       if (normalized.nonCompletable) return;
       // Check if this is a projected instance (not yet in DB)
@@ -236,9 +246,10 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           payload: {
             instanceId: realizedInstance.id,
             childId,
-            starReward: Number((realizedInstance.stars ?? normalized.stars) || 0),
-            moneyReward: Number((realizedInstance.money ?? normalized.money) || 0),
+            starReward: Number(rewardOverride?.stars ?? ((realizedInstance.stars ?? normalized.stars) || 0)),
+            moneyReward: Number(rewardOverride?.money ?? ((realizedInstance.money ?? normalized.money) || 0)),
             ...(typeof qualityScorePercent === 'number' ? { qualityScorePercent } : {}),
+            ...(completedAt ? { completedAt } : {}),
           },
           actorHandle,
         });
@@ -249,9 +260,10 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
           payload: {
             instanceId: actualInstance.id,
             childId,
-            starReward: Number((actualInstance.stars ?? normalized.stars) || 0),
-            moneyReward: Number((actualInstance.money ?? normalized.money) || 0),
+            starReward: Number(rewardOverride?.stars ?? ((actualInstance.stars ?? normalized.stars) || 0)),
+            moneyReward: Number(rewardOverride?.money ?? ((actualInstance.money ?? normalized.money) || 0)),
             ...(typeof qualityScorePercent === 'number' ? { qualityScorePercent } : {}),
+            ...(completedAt ? { completedAt } : {}),
           },
           actorHandle,
         });
@@ -343,6 +355,47 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
       return;
     }
     performResetProgress();
+  };
+
+  const handleRetroactiveComplete = () => {
+    if (normalized.nonCompletable || completed || !actualInstance) return;
+    setRetroCompletedAtIso(new Date(getLocalDateTimeString(new Date())).toISOString());
+    setRetroTreatAsOnTime(true);
+    setRetroModalOpen(true);
+  };
+
+  const applyRetroactiveComplete = (actorHandle?: string) => {
+    const isTimed = !!normalized.timed || typeof normalized.timedAllowedSeconds === 'number';
+    const rewardOverride =
+      isTimed && retroTreatAsOnTime
+        ? {
+            stars: Number((actualInstance?.stars ?? normalized.stars) || 0),
+            money: Number((actualInstance?.money ?? normalized.money) || 0),
+          }
+        : undefined;
+    performCompletion(actorHandle, undefined, retroCompletedAtIso, rewardOverride);
+  };
+
+  const handleRetroactiveConfirm = (completedAtIso: string, treatAsOnTime: boolean) => {
+    setRetroCompletedAtIso(completedAtIso);
+    setRetroTreatAsOnTime(treatAsOnTime);
+    const approvalRequired = requiresPin({
+      action: 'complete',
+      parentSettings: state.parentSettings,
+      task: normalized,
+    });
+    if (approvalRequired) {
+      if (!hasApprovers(state.parentSettings)) {
+        setAlertMessage("Retroactive completion requires parent approval, but no approvers are defined. Please add an approver in Settings first.");
+        setAlertOpen(true);
+        return;
+      }
+      setPendingRetroCompletion(true);
+      setPinOpen(true);
+    } else {
+      applyRetroactiveComplete();
+    }
+    setRetroModalOpen(false);
   };
 
   const performDelete = (option: DeleteOption, actorHandle?: string) => {
@@ -451,6 +504,12 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
     if (pendingResetProgress) {
       setPendingResetProgress(false);
       performResetProgress(actorHandle);
+      return;
+    }
+
+    if (pendingRetroCompletion) {
+      setPendingRetroCompletion(false);
+      applyRetroactiveComplete(actorHandle);
       return;
     }
 
@@ -788,6 +847,16 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
                   Waive task
                 </button>
               )}
+              {!normalized.nonCompletable && !completed && actualInstance && (
+                <button
+                  className="task-actions-menu-item"
+                  onClick={() => { setActionsMenuOpen(false); handleRetroactiveComplete(); }}
+                  title="Record that this task was completed in the past"
+                  role="menuitem"
+                >
+                  Log past completion
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -839,6 +908,7 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
             setScoreActorHandle(undefined);
             setPendingQualityAdjust(false);
             setPendingResetProgress(false);
+            setPendingRetroCompletion(false);
           }} 
           onSuccess={onPinSuccess} 
           message={
@@ -846,12 +916,21 @@ export default function TaskItem({ task, instance, childId }: TaskItemProps) {
               ? "Enter a parent PIN to delete or disable this task."
               : pendingResetProgress
                 ? "Enter a parent PIN to reset this task’s progress."
+              : pendingRetroCompletion
+                ? "Enter a parent PIN to record this retroactive completion."
               : pendingQualityAdjust
                 ? "Enter a parent PIN to adjust this completion score."
               : pendingCompletionActionId && pendingCompletionId
                 ? (applyMoneyOnApprove ? "Approve this timed completion?" : "Forgive money for this timed completion?")
                 : "Enter a parent PIN to complete this task."
           } 
+        />
+        <RetroactiveCompletionModal
+          open={retroModalOpen}
+          taskTitle={displayTitle}
+          isTimedTask={!!normalized.timed || typeof normalized.timedAllowedSeconds === 'number'}
+          onConfirm={handleRetroactiveConfirm}
+          onCancel={() => setRetroModalOpen(false)}
         />
         <AlertModal
           open={alertOpen}
