@@ -3,6 +3,7 @@ import type { Task, TaskInstance } from '../../types/task';
 import {
   applyUndonePenaltyIfDue,
   evaluateConsequenceRules,
+  legacyTimedToConsequenceRules,
   resolveContinuousMoneyOutcome,
   resolveMoneyTier,
   resolveTimedOutcome,
@@ -40,6 +41,38 @@ describe('Smoke: consequence engine', () => {
     const late = resolveTimedOutcome(task, 90, 60);
     expect(onTime.moneyReward).toBe(2);
     expect(late.moneyReward).toBe(1);
+    expect(late.starReward).toBe(0);
+  });
+
+  it.each([
+    { label: 'positive 50% late payout', percent: 0.5, allowNegative: false, expectedMoney: 1 },
+    { label: 'zero late payout', percent: 0, allowNegative: false, expectedMoney: 0 },
+    { label: 'negative 50% late payout debt', percent: -0.5, allowNegative: true, expectedMoney: -1 },
+    { label: 'negative late payout clamped when debt is disabled', percent: -0.5, allowNegative: false, expectedMoney: 0 },
+  ])('applies signed timed late payout percentages: $label', ({ percent, allowNegative, expectedMoney }) => {
+    const task: Task = makeTimedTask({
+      money: 2,
+      stars: 1,
+      timed: { allowedSeconds: 60, latePenaltyPercent: percent, autoApproveOnStop: false, allowNegative },
+    });
+    const late = resolveTimedOutcome(task, 90, 60);
+    expect(late.moneyReward).toBe(expectedMoney);
+    expect(late.starReward).toBe(0);
+  });
+
+  it.each([
+    { label: 'positive 50% generated legacy rule', percent: 0.5, allowNegative: false, expectedMoney: 1 },
+    { label: 'zero generated legacy rule', percent: 0, allowNegative: false, expectedMoney: 0 },
+    { label: 'negative 50% generated legacy rule', percent: -0.5, allowNegative: true, expectedMoney: -1 },
+  ])('preserves signed timed late payout in normalized legacy rules: $label', ({ percent, allowNegative, expectedMoney }) => {
+    const task: Task = makeTimedTask({
+      money: 2,
+      stars: 1,
+      timed: { allowedSeconds: 60, latePenaltyPercent: percent, autoApproveOnStop: false, allowNegative },
+    });
+    const normalized = { ...task, consequenceRules: legacyTimedToConsequenceRules(task) };
+    const late = resolveTimedOutcome(normalized, 90, 60);
+    expect(late.moneyReward).toBe(expectedMoney);
     expect(late.starReward).toBe(0);
   });
 

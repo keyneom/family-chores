@@ -109,6 +109,60 @@ describe('Smoke: reducer core workflows', () => {
     expect(unchanged).toEqual(base);
   });
 
+  it.each([
+    { label: 'positive 50% payout', percent: 0.5, allowNegative: false, expectedMoney: 1 },
+    { label: 'zero payout', percent: 0, allowNegative: false, expectedMoney: 0 },
+    { label: 'negative 50% debt', percent: -0.5, allowNegative: true, expectedMoney: -1 },
+  ])('applies timed late percentage through stop and approval: $label', ({ percent, allowNegative, expectedMoney }) => {
+    const timedTask = makeTimedTask({
+      money: 2,
+      stars: 3,
+      timed: {
+        allowedSeconds: 300,
+        latePenaltyPercent: percent,
+        autoApproveOnStop: false,
+        allowNegative,
+      },
+    });
+    const taskKey = buildTaskKey(1, timedTask.id, '2026-04-21');
+    let state = makeBaseState({
+      taskInstances: [
+        makeTaskInstance({
+          id: `inst_timed_${String(percent).replace('-', 'neg_').replace('.', '_')}`,
+          templateId: timedTask.id,
+          date: '2026-04-21',
+          childId: 1,
+        }),
+      ],
+      timers: {
+        timer_late: {
+          id: 'timer_late',
+          taskKey,
+          childId: 1,
+          startedAt: '2026-04-21T10:00:00.000Z',
+          allowedSeconds: 300,
+        },
+      },
+    });
+    state = choresAppReducer(state, { type: 'ADD_TASK', payload: timedTask });
+    state = choresAppReducer(state, {
+      type: 'STOP_TIMER',
+      payload: { timerId: 'timer_late', stoppedAt: '2026-04-21T10:06:00.000Z' },
+    });
+
+    const completion = state.timedCompletions?.[0];
+    expect(completion?.rewardPercentage).toBe(percent);
+    expect(completion?.starReward).toBe(0);
+    expect(completion?.moneyReward).toBe(expectedMoney);
+    expect(state.children.find((c) => c.id === 1)?.money).toBe(0);
+
+    state = choresAppReducer(state, {
+      type: 'APPROVE_TIMED_COMPLETION',
+      payload: { completionId: completion!.id, approve: true, applyMoney: true },
+    });
+    expect(state.children.find((c) => c.id === 1)?.money).toBe(expectedMoney);
+  });
+
   it('applies combined missed consequence once when carry-over expires', () => {
     const task = makeRecurringTask({
       id: 'task_miss_policy',

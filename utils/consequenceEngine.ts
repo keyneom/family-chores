@@ -114,8 +114,8 @@ export function evaluateConsequenceRules(
       return { starReward: 0, moneyReward: 0 };
     }
     if (lateMode === 'scaled_penalty') {
-      const penalty = task.timed?.latePenaltyPercent ?? 0.5;
-      const scaled = baseMoney * (1 - penalty);
+      const payoutPercent = task.timed?.latePenaltyPercent ?? 0.5;
+      const scaled = baseMoney * payoutPercent;
       return {
         starReward: 0,
         moneyReward: task.timed?.allowNegative ? scaled : Math.max(0, scaled),
@@ -184,7 +184,8 @@ export function legacyTimedToConsequenceRules(task: Task): ConsequenceRule[] | u
   if (!task.timed) return task.consequenceRules;
   if (task.consequenceRules && task.consequenceRules.length > 0) return task.consequenceRules;
 
-  const penalty = task.timed.latePenaltyPercent ?? 0.5;
+  const payoutPercent = task.timed.latePenaltyPercent ?? 0.5;
+  const rewardMultiplier = task.timed.allowNegative ? payoutPercent : Math.max(0, payoutPercent);
   return [
     {
       id: `${task.id}_on_time_default`,
@@ -194,7 +195,7 @@ export function legacyTimedToConsequenceRules(task: Task): ConsequenceRule[] | u
     {
       id: `${task.id}_late_default`,
       trigger: 'late',
-      rewardMultiplier: 1 - penalty,
+      rewardMultiplier,
       starDelta: 0,
     },
   ];

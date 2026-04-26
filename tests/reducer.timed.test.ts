@@ -16,7 +16,7 @@ describe('Timed Task Reducer', () => {
       money: 10.0,
       timed: {
         allowedSeconds: 300, // 5 minutes
-        latePenaltyPercent: 0.5, // 50% when late
+        latePenaltyPercent: 0.5, // 50% payout when late
         autoApproveOnStop: false,
         allowNegative: false,
       },
@@ -150,20 +150,20 @@ describe('Timed Task Reducer', () => {
 
       const completion = newState.timedCompletions?.[0];
       expect(completion?.elapsedSeconds).toBe(360);
-      expect(completion?.rewardPercentage).toBe(0.5); // 50% penalty
+      expect(completion?.rewardPercentage).toBe(0.5); // 50% payout
       expect(completion?.starReward).toBe(0); // No stars for late completion
       expect(completion?.moneyReward).toBe(5.0); // 50% of 10.0
     });
 
     it('should clamp negative money when allowNegative is false', () => {
       const initialState = createInitialState();
-      // Update task with penalty > 100% (creates negative payout when late)
+      // Update task with negative late payout, but keep debt disabled.
       initialState.tasks[0] = {
         ...initialState.tasks[0],
         money: 20.0,
         timed: {
           ...initialState.tasks[0].timed!,
-          latePenaltyPercent: 1.5, // 150% penalty -> rewardPercentage = -0.5
+          latePenaltyPercent: -0.5,
           allowNegative: false,
         },
       };
@@ -187,7 +187,7 @@ describe('Timed Task Reducer', () => {
 
       const completion = newState.timedCompletions?.[0];
       expect(completion?.elapsedSeconds).toBe(600);
-      expect(completion?.rewardPercentage).toBe(-0.5);
+      expect(completion?.rewardPercentage).toBe(0);
       expect(completion?.moneyReward).toBe(0); // Clamped
     });
 
@@ -198,7 +198,7 @@ describe('Timed Task Reducer', () => {
         money: 20.0,
         timed: {
           ...initialState.tasks[0].timed!,
-          latePenaltyPercent: 1.5,
+          latePenaltyPercent: -0.5,
           allowNegative: true,
         },
       };

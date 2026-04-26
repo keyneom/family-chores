@@ -89,7 +89,8 @@ export interface Chore {
   timed?: boolean;
   // Allowed duration in seconds for the task
   allowedSeconds?: number;
-  // Penalty (or modifier) applied when time is exceeded. Expressed as fraction (e.g. 0.5 = 50%). Can be negative to represent debt.
+  // Money payout multiplier when time is exceeded: 0.5 = half reward, 0 = none, -0.5 = debt.
+  // Undefined falls back to the app's half-reward default for legacy timed tasks.
   latePenaltyPercent?: number;
   // If true, completions from child stopping the timer are auto-approved
   autoApproveOnStop?: boolean;

@@ -187,8 +187,8 @@ export interface TaskBase {
 export interface TimedSettings {
   // amount of time allowed in seconds
   allowedSeconds: number;
-  // percent to apply when late (e.g. 50 for 50% when late). Negative allowed for penalties.
-  latePenaltyPercent?: number; // optional, defaults to 0 (no reward)
+  // Money payout multiplier when late: 0.5 = half reward, 0 = none, -0.5 = debt.
+  latePenaltyPercent?: number; // optional, defaults to 0.5 (half reward)
   // whether stopping the timer auto-approves the completion (overrides parent default)
   autoApproveOnStop?: boolean;
   // allow negative money results from timed completion flows

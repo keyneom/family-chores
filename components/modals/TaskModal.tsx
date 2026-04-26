@@ -630,7 +630,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
           allowedSeconds: Math.round(allowedMinutes * 60),
           latePenaltyPercent: latePenaltyPercent / 100,
           autoApproveOnStop,
-          allowNegative: latePenaltyPercent > 100,
+          allowNegative: latePenaltyPercent < 0,
         },
       } : {}),
       ...(type === 'oneoff' ? {
@@ -1412,7 +1412,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                     />
                   </label>
                   <label htmlFor="timed-late-penalty">
-                    Late Penalty (%):
+                    Late Payout (%):
                     <input 
                       id="timed-late-penalty"
                       name="timed-late-penalty"
@@ -1422,7 +1422,7 @@ export default function TaskModal({ open, onClose, initialTask = null, onSave, e
                       onChange={e => setLatePenaltyPercent(Number(e.target.value))} 
                     />
                   <p className="helper-text">
-                    50 = half reward when late; 150 = -50% (debt).
+                    50 = half reward when late; 0 = no money; -50 = child loses half the base money reward.
                   </p>
                   </label>
                   <label htmlFor="timed-auto-approve">
