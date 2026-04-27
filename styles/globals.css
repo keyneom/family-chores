@@ -110,7 +110,7 @@ header h1 {
 .children-grid::before,
 .children-grid::after {
   content: '';
-  position: absolute;
+  position: sticky;
   top: 0;
   bottom: 17px;
   width: 20px;
